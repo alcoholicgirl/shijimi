@@ -1,7 +1,7 @@
 use wgpu::util::DeviceExt;
 
 mod camera;
-// mod gltfnode;
+mod gltfnode;
 mod vertex;
 
 mod state;
@@ -11,8 +11,7 @@ fn main() -> anyhow::Result<()> {
     let window = winit::window::WindowBuilder::new().build(&event_loop)?;
     let mut state = async_std::task::block_on(async { state::State::new(&window).await.unwrap() });
     let mut surface_configured = false;
-// 
-    // let node = gltfnode::load_gltf_from_slice(include_bytes!("../assets/model/cube/scene.gltf"))?;
+    // let node = gltfnode::load_gltf_from_path("assets/model/9mm/scene.gltf")?;
 
     let vertices = state
         .device
@@ -29,7 +28,7 @@ fn main() -> anyhow::Result<()> {
             contents: to_bytes(&INDICES),
             usage: wgpu::BufferUsages::INDEX,
         });
-        
+
     let mut camera = camera::Camera::default();
     let aspect_ratio = state.size.width as f32 / state.size.height as f32;
     let camera_buffer = state
@@ -39,8 +38,22 @@ fn main() -> anyhow::Result<()> {
             contents: to_bytes(&camera.uniform(aspect_ratio)),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         });
-    let texture_bind_group =
+    let (tex_view, tex_sampler) =
         state.request_texture_rgba8(include_bytes!("../assets/image/60.png"))?;
+    let texture_bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Texture Bind Group"),
+        layout: &state.texture_bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&tex_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&tex_sampler),
+            },
+        ],
+    });
     let camera_bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Camera Bind Group"),
         layout: &state.camera_bind_group_layout,
@@ -175,4 +188,4 @@ const VERTICES: [Vertex; 4] = [
     },
 ];
 
-const INDICES: [u16; 6] = [0, 2, 1, 1, 2, 3];
+const INDICES: [u32; 6] = [0, 2, 1, 1, 2, 3];
