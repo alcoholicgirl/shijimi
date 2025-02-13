@@ -1,0 +1,8 @@
+Model Information:
+* title:	9 mm
+* source:	https://sketchfab.com/3d-models/9-mm-5124e7fe60fb4d3ab62460609d23f365
+* author:	Slava Zemlyanik (https://sketchfab.com/reijin)
+
+Model License:
+* license type:	SKETCHFAB Standard (https://sketchfab.com/licenses)
+* requirements:	Under basic restrictions, use worldwide, on all types of media, commercially or not, and in all types of derivative works
