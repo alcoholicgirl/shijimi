@@ -43,7 +43,8 @@ var<uniform> m_ao: vec4f;
 
 // Camera View
 struct CameraUniform {
-    @location(0) view_proj: mat4x4<f32> 
+    @location(0) view_proj: mat4x4<f32>,
+    @location(1) view_pos: vec3f
 }
 @group(1) @binding(0)
 var<uniform> camera: CameraUniform;
@@ -66,15 +67,19 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) clip_position: vec4f,
     @location(0) texcoord: vec2f,
+    @location(1) normal: vec3f,
+    @location(2) tangent: vec4f,
 };
 
 @vertex
 fn vs_main(
-    vertex: VertexInput,
+    in: VertexInput,
 ) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = camera.view_proj * model.model * vec4(vertex.position, 1.0);
-    out.texcoord = vertex.texcoord;
+    out.clip_position = camera.view_proj * model.model * vec4(in.position, 1.0);
+    out.texcoord = in.texcoord;
+    out.normal = in.normal;
+    out.tangent = in.tangent;
     return out;
 }
 

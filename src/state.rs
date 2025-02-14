@@ -1,3 +1,5 @@
+use crate::{gltfnode::RenderResource, texture::Texture};
+
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
     pub device: wgpu::Device,
@@ -9,6 +11,7 @@ pub struct State<'a> {
     pub camera_bind_group_layout: wgpu::BindGroupLayout,
     pub model_bind_group_layout: wgpu::BindGroupLayout,
 
+    depth_buffer: Texture,
     render_pipeline: wgpu::RenderPipeline,
 
     pub size: winit::dpi::PhysicalSize<u32>,
@@ -95,7 +98,13 @@ impl<'a> State<'a> {
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState {
                 count: 1,
                 mask: !0,
@@ -104,6 +113,8 @@ impl<'a> State<'a> {
             multiview: None,
             cache: None,
         });
+
+        let depth_buffer = Texture::create_depth_buffer(&device, config.width, config.height);
         Ok(Self {
             surface,
             device,
@@ -113,6 +124,7 @@ impl<'a> State<'a> {
             camera_bind_group_layout,
             model_bind_group_layout,
             render_pipeline,
+            depth_buffer,
             size,
             window,
         })
@@ -124,6 +136,11 @@ impl<'a> State<'a> {
             self.config.width = size.width;
             self.config.height = size.height;
             self.surface.configure(&self.device, &self.config);
+
+            // Create new depth buffer corresponding to screen size
+            let depth_buffer = Texture::create_depth_buffer(&self.device, size.width, size.height);
+            let old_buffer = std::mem::replace(&mut self.depth_buffer, depth_buffer);
+            drop(old_buffer); // just in case
         }
     }
 
@@ -131,10 +148,7 @@ impl<'a> State<'a> {
 
     fn try_render(
         &self,
-        vertex_buffer: &wgpu::Buffer,
-        index_buffer: &wgpu::Buffer,
-        texture_bind_group: &wgpu::BindGroup,
-        model_bind_group: &wgpu::BindGroup,
+        render_resources: std::slice::Iter<'_, RenderResource<'_>>,
         camera_bind_group: &wgpu::BindGroup,
     ) -> Result<(), wgpu::SurfaceError> {
         let surface_output = self.surface.get_current_texture()?;
@@ -164,39 +178,50 @@ impl<'a> State<'a> {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: match &self.depth_buffer {
+                        Texture::Online { view, .. } => view,
+                        _ => unreachable!(),
+                    },
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 ..Default::default()
             });
             render_pass.set_pipeline(&self.render_pipeline);
 
-            // bind groups
-            render_pass.set_bind_group(0, texture_bind_group, &[]);
-            render_pass.set_bind_group(1, camera_bind_group, &[]);
-            render_pass.set_bind_group(2, model_bind_group, &[]);
+            for resource in render_resources {
+                let (vertex_buffer, index_buffer, texture_bind_group, model_bind_group) = (
+                    resource.vertex_buffer,
+                    resource.index_buffer,
+                    resource.texture_bind_group,
+                    resource.model_bind_group,
+                );
+                // bind groups
+                render_pass.set_bind_group(0, texture_bind_group, &[]);
+                render_pass.set_bind_group(1, camera_bind_group, &[]);
+                render_pass.set_bind_group(2, model_bind_group, &[]);
 
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-            render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            let index_num = (index_buffer.size() / std::mem::size_of::<u32>() as u64) as u32;
-            render_pass.draw_indexed(0..index_num, 0, 0..1);
+                render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                let index_num = (index_buffer.size() / std::mem::size_of::<u32>() as u64) as u32;
+                render_pass.draw_indexed(0..index_num, 0, 0..1);
+            }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         surface_output.present();
         Ok(())
     }
 
-    pub fn render(&mut self,
-        vertex_buffer: &wgpu::Buffer,
-        index_buffer: &wgpu::Buffer,
-        texture_bind_group: &wgpu::BindGroup,
-        model_bind_group: &wgpu::BindGroup,
+    pub fn render(
+        &mut self,
+        render_resources: std::slice::Iter<'_, RenderResource<'_>>,
         camera_bind_group: &wgpu::BindGroup,
     ) {
-        match self.try_render(
-            &vertex_buffer,
-            &index_buffer,
-            &texture_bind_group,
-            &camera_bind_group,
-            &model_bind_group,
-        ) {
+        match self.try_render(render_resources, camera_bind_group) {
             Ok(_) => (),
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
                 self.resize(self.size);

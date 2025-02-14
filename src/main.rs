@@ -3,7 +3,9 @@ use wgpu::util::DeviceExt;
 mod bytecast;
 mod camera;
 mod gltfnode;
+mod material;
 mod state;
+mod texture;
 mod vertex;
 use bytecast::*;
 
@@ -13,7 +15,7 @@ fn main() -> anyhow::Result<()> {
     let window = winit::window::WindowBuilder::new().build(&event_loop)?;
     let mut state = async_std::task::block_on(async { state::State::new(&window).await.unwrap() });
     let mut surface_configured = false;
-    let mut node = gltfnode::GltfNode::load_from_path("assets/model/9mm/scene.gltf")?;
+    let mut node = gltfnode::GltfNode::load_from_path("assets/model/mushroom/scene.gltf")?;
 
     let mut camera = camera::Camera::default();
     let aspect_ratio = state.size.width as f32 / state.size.height as f32;
@@ -21,7 +23,7 @@ fn main() -> anyhow::Result<()> {
         .device
         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Uniform Buffer"),
-            contents: to_bytes(&camera.uniform(aspect_ratio)),
+            contents: cast_bytes(&camera.uniform(aspect_ratio)),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         });
 
@@ -42,7 +44,6 @@ fn main() -> anyhow::Result<()> {
     );
 
     let mut frame = 0;
-
     event_loop.run(move |ev, control_flow| match ev {
         winit::event::Event::WindowEvent {
             window_id,
@@ -71,25 +72,19 @@ fn main() -> anyhow::Result<()> {
                             state.queue.write_buffer(
                                 &camera_buffer,
                                 0,
-                                bytecast::to_bytes(&camera_uniform),
+                                bytecast::cast_bytes(&camera_uniform),
                             );
 
-                            let resources = node.prepare_draw(
-                                &state.device,
+                            node.apply_model(
                                 &state.queue,
-                                glam::Mat4::IDENTITY,
+                                glam::Mat4::from_translation(glam::Vec3 {
+                                    x: 0.0,
+                                    y: -0.4,
+                                    z: 0.0,
+                                }) * glam::Mat4::from_scale(glam::Vec3::ONE * 0.5),
                             );
-                            for resource in resources.iter() {
-                                state.render(
-                                    resource.vertex_buffer,
-                                    resource.index_buffer,
-                                    resource.texture_bind_group,
-                                    resource.model_bind_group,
-                                    &camera_bind_group,
-                                );
-                            }
-
-                            // state.render(vertex_buffer, index_buffer, texture_bind_group, &camera_bind_group, model_bind_group);
+                            let resources = node.request_resources(&state.device, &state.queue);
+                            state.render(resources.iter(), &camera_bind_group);
                         }
                     }
                     winit::event::WindowEvent::CloseRequested => {

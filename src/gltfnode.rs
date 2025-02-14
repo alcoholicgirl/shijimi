@@ -1,4 +1,4 @@
-use crate::{bytecast, vertex::Vertex};
+use crate::{bytecast, material::Material, texture::Texture, vertex::Vertex};
 use gltf::mesh::util::*;
 use iter_tools::dependency::itertools::izip;
 use wgpu::util::DeviceExt;
@@ -10,36 +10,6 @@ pub struct Mesh {
     buffers: Option<(wgpu::Buffer, wgpu::Buffer)>,
 }
 
-#[allow(unused)]
-#[derive(Default)]
-pub struct Material {
-    albedo: Option<Texture>,
-    normal: Option<Texture>,
-    metallic: Option<Texture>,
-    roughness: Option<Texture>,
-    ao: Option<Texture>,
-    bind_group: Option<wgpu::BindGroup>,
-}
-
-#[allow(unused)]
-pub enum Texture {
-    Offline {
-        width: u32,
-        height: u32,
-        data: Vec<u8>,
-        modulation: [f32; 4],
-    },
-    Online {
-        handle: wgpu::Texture,
-        view: wgpu::TextureView,
-        sampler: wgpu::Sampler,
-        uniform_buffer: wgpu::Buffer,
-        modulation: [f32; 4],
-    },
-}
-
-#[allow(unused)]
-#[derive(Default)]
 pub struct GltfNode {
     id: usize,
     name: Option<String>,
@@ -49,8 +19,8 @@ pub struct GltfNode {
     position: glam::Vec3,
     rotation: glam::Quat,
     scale: glam::Vec3,
-    buffer: Option<wgpu::Buffer>,
-    bind_group: Option<wgpu::BindGroup>,
+    uniform_buffer: Option<wgpu::Buffer>,
+    model_bind_group: Option<wgpu::BindGroup>,
 }
 
 pub struct RenderResource<'a> {
@@ -382,266 +352,6 @@ fn build(
     gltfnode
 }
 
-impl Texture {
-    pub fn submit(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        if let Texture::Offline {
-            width,
-            height,
-            data,
-            modulation,
-        } = self
-        {
-            let size = wgpu::Extent3d {
-                width: *width,
-                height: *height,
-                depth_or_array_layers: 1,
-            };
-            let tex_buf = device.create_texture(&wgpu::TextureDescriptor {
-                label: None,
-                size,
-                dimension: wgpu::TextureDimension::D2,
-                sample_count: 1,
-                mip_level_count: 1,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfoBase {
-                    texture: &tex_buf,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &data.as_slice(),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4u32 * *width),
-                    rows_per_image: Some(*height),
-                },
-                size,
-            );
-            let tex_view = tex_buf.create_view(&wgpu::TextureViewDescriptor::default());
-            let tex_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Nearest,
-                mipmap_filter: wgpu::FilterMode::Nearest,
-                ..Default::default()
-            });
-
-            let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Modulation buffer"),
-                contents: bytecast::to_bytes(modulation),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-            *self = Texture::Online {
-                handle: tex_buf,
-                view: tex_view,
-                sampler: tex_sampler,
-                uniform_buffer,
-                modulation: *modulation,
-            }
-        }
-    }
-
-    pub fn from_rgba8(rgba: [u8; 4]) -> Self {
-        Self::Offline {
-            width: 1,
-            height: 1,
-            data: rgba.to_vec(),
-            modulation: [1.0; 4],
-        }
-    }
-}
-
-impl Drop for Texture {
-    fn drop(&mut self) {
-        if let Texture::Online { handle, .. } = self {
-            handle.destroy();
-        }
-    }
-}
-
-impl Material {
-    pub fn submit(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texture_bind_group_layout: &wgpu::BindGroupLayout,
-    ) {
-        if self.albedo.is_none() {
-            self.albedo = Some(Texture::from_rgba8([0x00u8; 4]));
-        }
-        if self.normal.is_none() {
-            self.normal = Some(Texture::from_rgba8([0x80, 0x80, 0xFF, 0xFF]));
-        }
-        if self.metallic.is_none() {
-            self.metallic = Some(Texture::from_rgba8([0x00u8; 4]));
-        }
-        if self.roughness.is_none() {
-            self.roughness = Some(Texture::from_rgba8([0x00u8; 4]));
-        }
-        if self.ao.is_none() {
-            self.ao = Some(Texture::from_rgba8([0x00u8; 4]));
-        }
-
-        self.albedo.as_mut().unwrap().submit(device, queue);
-        self.normal.as_mut().unwrap().submit(device, queue);
-        self.metallic.as_mut().unwrap().submit(device, queue);
-        self.roughness.as_mut().unwrap().submit(device, queue);
-        self.ao.as_mut().unwrap().submit(device, queue);
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Albedo View"),
-            layout: &texture_bind_group_layout,
-            entries: &[
-                // Albedo
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        match &self.albedo.as_ref().unwrap() {
-                            Texture::Online { view, .. } => view,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(
-                        match &self.albedo.as_ref().unwrap() {
-                            Texture::Online { sampler, .. } => sampler,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: match &self.albedo.as_ref().unwrap() {
-                        Texture::Online { uniform_buffer, .. } => {
-                            uniform_buffer.as_entire_binding()
-                        }
-                        Texture::Offline { .. } => unreachable!(),
-                    },
-                },
-                // Normal
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(
-                        match &self.normal.as_ref().unwrap() {
-                            Texture::Online { view, .. } => view,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(
-                        match &self.normal.as_ref().unwrap() {
-                            Texture::Online { sampler, .. } => sampler,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: match &self.normal.as_ref().unwrap() {
-                        Texture::Online { uniform_buffer, .. } => {
-                            uniform_buffer.as_entire_binding()
-                        }
-                        Texture::Offline { .. } => unreachable!(),
-                    },
-                },
-                // Metallic
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::TextureView(
-                        match &self.metallic.as_ref().unwrap() {
-                            Texture::Online { view, .. } => view,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::Sampler(
-                        match &self.metallic.as_ref().unwrap() {
-                            Texture::Online { sampler, .. } => sampler,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: match &self.metallic.as_ref().unwrap() {
-                        Texture::Online { uniform_buffer, .. } => {
-                            uniform_buffer.as_entire_binding()
-                        }
-                        Texture::Offline { .. } => unreachable!(),
-                    },
-                },
-                // Roughness
-                wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: wgpu::BindingResource::TextureView(
-                        match &self.roughness.as_ref().unwrap() {
-                            Texture::Online { view, .. } => view,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 10,
-                    resource: wgpu::BindingResource::Sampler(
-                        match &self.roughness.as_ref().unwrap() {
-                            Texture::Online { sampler, .. } => sampler,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 11,
-                    resource: match &self.roughness.as_ref().unwrap() {
-                        Texture::Online { uniform_buffer, .. } => {
-                            uniform_buffer.as_entire_binding()
-                        }
-                        Texture::Offline { .. } => unreachable!(),
-                    },
-                },
-                // AO
-                wgpu::BindGroupEntry {
-                    binding: 12,
-                    resource: wgpu::BindingResource::TextureView(
-                        match &self.ao.as_ref().unwrap() {
-                            Texture::Online { view, .. } => view,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 13,
-                    resource: wgpu::BindingResource::Sampler(match &self.ao.as_ref().unwrap() {
-                        Texture::Online { sampler, .. } => sampler,
-                        Texture::Offline { .. } => unreachable!(),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 14,
-                    resource: match &self.ao.as_ref().unwrap() {
-                        Texture::Online { uniform_buffer, .. } => {
-                            uniform_buffer.as_entire_binding()
-                        }
-                        Texture::Offline { .. } => unreachable!(),
-                    },
-                },
-            ],
-        });
-        self.bind_group = Some(bind_group);
-    }
-}
-
 impl Mesh {
     pub fn submit(&mut self, device: &wgpu::Device) -> anyhow::Result<()> {
         if self.buffers.is_some() {
@@ -649,13 +359,13 @@ impl Mesh {
         }
         let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytecast::vec_to_bytes(&self.vertices),
+            contents: bytecast::cast_bytes_vec(&self.vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
         let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
-            contents: bytecast::vec_to_bytes(&self.indices),
+            contents: bytecast::cast_bytes_vec(&self.indices),
             usage: wgpu::BufferUsages::INDEX,
         });
 
@@ -665,7 +375,6 @@ impl Mesh {
 }
 
 impl GltfNode {
-
     // Initialize GltfNode
     pub fn submit(
         &mut self,
@@ -683,7 +392,7 @@ impl GltfNode {
         log::info!("Node #{}: requesting mesh buffers", self.id);
         if let Some(mesh) = &mut self.mesh {
             if mesh.buffers.is_none() {
-                mesh.submit(device);
+                let _ = mesh.submit(device);
             }
         }
 
@@ -692,19 +401,20 @@ impl GltfNode {
             self.id
         );
         let model = self.model_matrix().to_cols_array_2d();
-        self.buffer = Some(
+        self.uniform_buffer = Some(
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Model Uniform Buffer"),
-                contents: bytecast::to_bytes(&model),
+                contents: bytecast::cast_bytes(&model),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }),
         );
-        self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+
+        self.model_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Model Uniform Bind Group"),
             layout: &model_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: self.buffer.as_ref().unwrap().as_entire_binding(),
+                resource: self.uniform_buffer.as_ref().unwrap().as_entire_binding(),
             }],
         }));
 
@@ -762,31 +472,30 @@ impl GltfNode {
         self.scale = scale;
     }
 
-    pub fn prepare_draw(
+    pub fn apply_model(&self, queue: &wgpu::Queue, model: glam::Mat4) {
+        // Update model matrix uniform
+        let t_model = model * self.model_matrix();
+        let uniform_data = t_model.to_cols_array_2d();
+        let uniform = bytecast::cast_bytes(&uniform_data);
+        if let Some(buffer) = &self.uniform_buffer {
+            queue.write_buffer(buffer, 0, uniform);
+        }
+
+        for child in &self.children {
+            child.apply_model(queue, t_model);
+        }
+    }
+
+    pub fn request_resources(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        model: glam::Mat4,
     ) -> Vec<RenderResource> {
-        let t_model = model * self.model_matrix();
-        let uniform_data = t_model.to_cols_array_2d();
-        let model_uniform = bytecast::to_bytes(&uniform_data);
-
-        // Update uniform buffer
-        queue.write_buffer(
-            &self
-                .buffer
-                .as_ref()
-                .expect("No buffer found! Is node initialized?"),
-            0,
-            bytecast::to_bytes(&model_uniform),
-        );
-
         let mut resources = vec![];
         if let Some(mesh) = &self.mesh {
             if let Some((vb, ib)) = &mesh.buffers {
                 if let (Some(texture_bind_group), Some(model_bind_group)) =
-                    (&self.material.bind_group, &self.bind_group)
+                    (&self.material.bind_group, &self.model_bind_group)
                 {
                     resources.push(RenderResource {
                         vertex_buffer: vb,
@@ -794,7 +503,6 @@ impl GltfNode {
                         model_bind_group,
                         texture_bind_group,
                     });
-
                 } else {
                     log::warn!(
                         "Node #{}: buffers or(and) bind groups not initialized, skipping.",
@@ -807,10 +515,27 @@ impl GltfNode {
         }
 
         for child in &self.children {
-            for resource in child.prepare_draw(device, queue, model) {
+            for resource in child.request_resources(device, queue) {
                 resources.push(resource);
             }
         }
         resources
+    }
+}
+
+impl Default for GltfNode {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            name: None,
+            children: vec![],
+            mesh: None,
+            material: Material::default(),
+            uniform_buffer: None,
+            model_bind_group: None,
+            position: glam::Vec3::ZERO,
+            rotation: glam::Quat::IDENTITY,
+            scale: glam::Vec3::ONE,
+        }
     }
 }
