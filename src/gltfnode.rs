@@ -1,43 +1,66 @@
-use crate::vertex::Vertex;
+use crate::{bytecast, vertex::Vertex};
 use gltf::mesh::util::*;
-use iter_tools::{dependency::itertools::izip, Itertools};
+use iter_tools::dependency::itertools::izip;
+use wgpu::util::DeviceExt;
 
+#[allow(unused)]
 pub struct Mesh {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
+    buffers: Option<(wgpu::Buffer, wgpu::Buffer)>,
 }
 
+#[allow(unused)]
 #[derive(Default)]
 pub struct Material {
     albedo: Option<Texture>,
     normal: Option<Texture>,
-    metallic_roughness: Option<Texture>,
+    metallic: Option<Texture>,
+    roughness: Option<Texture>,
     ao: Option<Texture>,
+    bind_group: Option<wgpu::BindGroup>,
 }
 
+#[allow(unused)]
 pub enum Texture {
     Offline {
         width: u32,
         height: u32,
         data: Vec<u8>,
-        factor: [f32; 4],
+        modulation: [f32; 4],
     },
     Online {
         handle: wgpu::Texture,
         view: wgpu::TextureView,
         sampler: wgpu::Sampler,
-        factor: [f32; 4],
+        uniform_buffer: wgpu::Buffer,
+        modulation: [f32; 4],
     },
 }
 
+#[allow(unused)]
 #[derive(Default)]
 pub struct GltfNode {
+    id: usize,
     name: Option<String>,
     children: Vec<GltfNode>,
     mesh: Option<Mesh>,
+    material: Material,
+    position: glam::Vec3,
+    rotation: glam::Quat,
+    scale: glam::Vec3,
+    buffer: Option<wgpu::Buffer>,
+    bind_group: Option<wgpu::BindGroup>,
 }
 
-fn construct_node(
+pub struct RenderResource<'a> {
+    pub vertex_buffer: &'a wgpu::Buffer,
+    pub index_buffer: &'a wgpu::Buffer,
+    pub texture_bind_group: &'a wgpu::BindGroup,
+    pub model_bind_group: &'a wgpu::BindGroup,
+}
+
+fn build(
     node: &gltf::Node,
     buffers: &Vec<gltf::buffer::Data>,
     images: &Vec<gltf::image::Data>,
@@ -59,10 +82,18 @@ fn construct_node(
         }
     );
 
-    let mut gltfnode = GltfNode::default();
+    let (position, rotation, scale) = node.transform().decomposed();
+    let mut gltfnode = GltfNode {
+        position: glam::Vec3::from(position),
+        rotation: glam::Quat::from_array(rotation),
+        scale: glam::Vec3::from(scale),
+        ..Default::default()
+    };
     if let Some(name) = node.name() {
         gltfnode.name = Some(name.to_string());
     }
+    gltfnode.id = node.index();
+
     if let Some(mesh) = node.mesh() {
         print!("(contains mesh)");
         for primitive in mesh.primitives() {
@@ -90,57 +121,103 @@ fn construct_node(
                 .pbr_metallic_roughness()
                 .base_color_texture()
             {
-                let albedo = &images[tex.texture().index()];
-                material.albedo = Some(Texture::Offline {
-                    width: albedo.width,
-                    height: albedo.height,
-                    data: rgba8_loader(albedo),
-                    factor: primitive.material().pbr_metallic_roughness().base_color_factor()
-                });
+                let albedo = &images.get(tex.texture().index());
+                if let Some(albedo) = albedo {
+                    material.albedo = Some(Texture::Offline {
+                        width: albedo.width,
+                        height: albedo.height,
+                        data: rgba8_loader(albedo),
+                        modulation: primitive
+                            .material()
+                            .pbr_metallic_roughness()
+                            .base_color_factor(),
+                    });
+                }
             }
 
             // Normal
             if let Some(normal) = primitive.material().normal_texture() {
                 let id = normal.texture().index();
-                let texture = &images[id];
-                material.normal = Some(Texture::Offline {
-                    width: texture.width,
-                    height: texture.height,
-                    data: rgba8_loader(texture),
-                    factor: [1.0; 4]
-                });
+                let texture = &images.get(id);
+                if let Some(texture) = texture {
+                    material.normal = Some(Texture::Offline {
+                        width: texture.width,
+                        height: texture.height,
+                        data: rgba8_loader(texture),
+                        modulation: [1.0; 4],
+                    });
+                }
             }
 
-            // Metallic-Roughness
+            // Metallic
             if let Some(tex) = primitive
                 .material()
                 .pbr_metallic_roughness()
                 .metallic_roughness_texture()
             {
-                let texture = &images[tex.texture().index()];
-                material.metallic_roughness = Some(Texture::Offline {
-                    width: texture.width,
-                    height: texture.height,
-                    data: rgba8_loader(texture),
-                    factor: [1.0; 4]
-                });
+                let texture = &images.get(tex.texture().index());
+                if let Some(texture) = texture {
+                    let data = rgba8_loader(texture);
+                    let metallic = data
+                        .clone()
+                        .chunks_exact(4)
+                        .map(|rgba| {
+                            let f = rgba[2];
+                            [f; 4].into_iter()
+                        })
+                        .flatten()
+                        .collect();
+                    let roughness = data
+                        .clone()
+                        .chunks_exact(4)
+                        .map(|rgba| {
+                            let f = rgba[1];
+                            [f; 4].into_iter()
+                        })
+                        .flatten()
+                        .collect();
+
+                    material.metallic = Some(Texture::Offline {
+                        width: texture.width,
+                        height: texture.height,
+                        data: metallic,
+                        modulation: [primitive
+                            .material()
+                            .pbr_metallic_roughness()
+                            .metallic_factor(); 4],
+                    });
+
+                    material.roughness = Some(Texture::Offline {
+                        width: texture.width,
+                        height: texture.height,
+                        data: roughness,
+                        modulation: [primitive
+                            .material()
+                            .pbr_metallic_roughness()
+                            .roughness_factor(); 4],
+                    });
+                }
             }
 
             // AO
             if let Some(tex) = primitive.material().occlusion_texture() {
-                let texture = &images[tex.texture().index()];
-                material.ao = Some(Texture::Offline {
-                    width: texture.width,
-                    height: texture.height,
-                    data: rgba8_loader(texture),
-                });
+                let texture = &images.get(tex.texture().index());
+                if let Some(texture) = texture {
+                    material.ao = Some(Texture::Offline {
+                        width: texture.width,
+                        height: texture.height,
+                        data: rgba8_loader(texture),
+                        modulation: [1.0; 4],
+                    });
+                }
             }
 
+            gltfnode.material = material;
+
+            // Geometry
             if primitive.mode() != gltf::mesh::Mode::Triangles {
                 panic!("Gltf model not triangulated");
             }
-
-            // Geometry
             let reader = primitive.reader(|buf| Some(&buffers[buf.index()]));
             // Positions
             let positions = if let Some(ReadPositions::Standard(iter)) = reader.read_positions() {
@@ -288,60 +365,30 @@ fn construct_node(
                     tangent,
                 })
                 .collect::<Vec<_>>();
-            let mesh = Mesh { vertices, indices };
+            let mesh = Mesh {
+                vertices,
+                indices,
+                buffers: None,
+            };
             gltfnode.mesh = Some(mesh);
         }
     }
 
     println!();
     for child in node.children() {
-        let child = construct_node(&child, &buffers, images, depth + 1);
+        let child = build(&child, &buffers, images, depth + 1);
         gltfnode.push(child);
     }
     gltfnode
 }
 
-pub fn load_gltf_from_slice(data: &[u8]) -> anyhow::Result<GltfNode> {
-    let (gltf, buffers, images) = gltf::import_slice(data)?;
-    let mut root_node = GltfNode::default();
-    for scene in gltf.scenes() {
-        for node in scene.nodes() {
-            root_node.push(construct_node(&node, &buffers, &images, 0));
-        }
-    }
-    Ok(root_node)
-}
-
-pub fn load_gltf_from_path(path: &'static str) -> anyhow::Result<GltfNode> {
-    let (gltf, buffers, images) = gltf::import(path)?;
-    let mut root_node = GltfNode::default();
-    for scene in gltf.scenes() {
-        for node in scene.nodes() {
-            root_node.push(construct_node(&node, &buffers, &images, 0));
-        }
-    }
-    Ok(root_node)
-}
-
-impl GltfNode {
-    pub fn new() -> Self {
-        Self {
-            name: None,
-            children: vec![],
-            mesh: None,
-        }
-    }
-    pub fn push(&mut self, child: GltfNode) {
-        self.children.push(child);
-    }
-}
-
 impl Texture {
-    pub fn request_online(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    pub fn submit(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         if let Texture::Offline {
             width,
             height,
             data,
+            modulation,
         } = self
         {
             let size = wgpu::Extent3d {
@@ -384,16 +431,29 @@ impl Texture {
                 mipmap_filter: wgpu::FilterMode::Nearest,
                 ..Default::default()
             });
+
+            let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Modulation buffer"),
+                contents: bytecast::to_bytes(modulation),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
             *self = Texture::Online {
                 handle: tex_buf,
                 view: tex_view,
                 sampler: tex_sampler,
+                uniform_buffer,
+                modulation: *modulation,
             }
         }
     }
 
     pub fn from_rgba8(rgba: [u8; 4]) -> Self {
-        Self::Offline { width: 1, height: 1, data: rgba.to_vec() }
+        Self::Offline {
+            width: 1,
+            height: 1,
+            data: rgba.to_vec(),
+            modulation: [1.0; 4],
+        }
     }
 }
 
@@ -406,7 +466,351 @@ impl Drop for Texture {
 }
 
 impl Material {
-    pub fn generate_bind_group() {
+    pub fn submit(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture_bind_group_layout: &wgpu::BindGroupLayout,
+    ) {
+        if self.albedo.is_none() {
+            self.albedo = Some(Texture::from_rgba8([0x00u8; 4]));
+        }
+        if self.normal.is_none() {
+            self.normal = Some(Texture::from_rgba8([0x80, 0x80, 0xFF, 0xFF]));
+        }
+        if self.metallic.is_none() {
+            self.metallic = Some(Texture::from_rgba8([0x00u8; 4]));
+        }
+        if self.roughness.is_none() {
+            self.roughness = Some(Texture::from_rgba8([0x00u8; 4]));
+        }
+        if self.ao.is_none() {
+            self.ao = Some(Texture::from_rgba8([0x00u8; 4]));
+        }
 
+        self.albedo.as_mut().unwrap().submit(device, queue);
+        self.normal.as_mut().unwrap().submit(device, queue);
+        self.metallic.as_mut().unwrap().submit(device, queue);
+        self.roughness.as_mut().unwrap().submit(device, queue);
+        self.ao.as_mut().unwrap().submit(device, queue);
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Albedo View"),
+            layout: &texture_bind_group_layout,
+            entries: &[
+                // Albedo
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(
+                        match &self.albedo.as_ref().unwrap() {
+                            Texture::Online { view, .. } => view,
+                            Texture::Offline { .. } => unreachable!(),
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(
+                        match &self.albedo.as_ref().unwrap() {
+                            Texture::Online { sampler, .. } => sampler,
+                            Texture::Offline { .. } => unreachable!(),
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: match &self.albedo.as_ref().unwrap() {
+                        Texture::Online { uniform_buffer, .. } => {
+                            uniform_buffer.as_entire_binding()
+                        }
+                        Texture::Offline { .. } => unreachable!(),
+                    },
+                },
+                // Normal
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(
+                        match &self.normal.as_ref().unwrap() {
+                            Texture::Online { view, .. } => view,
+                            Texture::Offline { .. } => unreachable!(),
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(
+                        match &self.normal.as_ref().unwrap() {
+                            Texture::Online { sampler, .. } => sampler,
+                            Texture::Offline { .. } => unreachable!(),
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: match &self.normal.as_ref().unwrap() {
+                        Texture::Online { uniform_buffer, .. } => {
+                            uniform_buffer.as_entire_binding()
+                        }
+                        Texture::Offline { .. } => unreachable!(),
+                    },
+                },
+                // Metallic
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(
+                        match &self.metallic.as_ref().unwrap() {
+                            Texture::Online { view, .. } => view,
+                            Texture::Offline { .. } => unreachable!(),
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler(
+                        match &self.metallic.as_ref().unwrap() {
+                            Texture::Online { sampler, .. } => sampler,
+                            Texture::Offline { .. } => unreachable!(),
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: match &self.metallic.as_ref().unwrap() {
+                        Texture::Online { uniform_buffer, .. } => {
+                            uniform_buffer.as_entire_binding()
+                        }
+                        Texture::Offline { .. } => unreachable!(),
+                    },
+                },
+                // Roughness
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(
+                        match &self.roughness.as_ref().unwrap() {
+                            Texture::Online { view, .. } => view,
+                            Texture::Offline { .. } => unreachable!(),
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::Sampler(
+                        match &self.roughness.as_ref().unwrap() {
+                            Texture::Online { sampler, .. } => sampler,
+                            Texture::Offline { .. } => unreachable!(),
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: match &self.roughness.as_ref().unwrap() {
+                        Texture::Online { uniform_buffer, .. } => {
+                            uniform_buffer.as_entire_binding()
+                        }
+                        Texture::Offline { .. } => unreachable!(),
+                    },
+                },
+                // AO
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: wgpu::BindingResource::TextureView(
+                        match &self.ao.as_ref().unwrap() {
+                            Texture::Online { view, .. } => view,
+                            Texture::Offline { .. } => unreachable!(),
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::Sampler(match &self.ao.as_ref().unwrap() {
+                        Texture::Online { sampler, .. } => sampler,
+                        Texture::Offline { .. } => unreachable!(),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: match &self.ao.as_ref().unwrap() {
+                        Texture::Online { uniform_buffer, .. } => {
+                            uniform_buffer.as_entire_binding()
+                        }
+                        Texture::Offline { .. } => unreachable!(),
+                    },
+                },
+            ],
+        });
+        self.bind_group = Some(bind_group);
+    }
+}
+
+impl Mesh {
+    pub fn submit(&mut self, device: &wgpu::Device) -> anyhow::Result<()> {
+        if self.buffers.is_some() {
+            return Err(anyhow::anyhow!("Mesh buffers already submitted"));
+        }
+        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytecast::vec_to_bytes(&self.vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytecast::vec_to_bytes(&self.indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        self.buffers = Some((vb, ib));
+        Ok(())
+    }
+}
+
+impl GltfNode {
+
+    // Initialize GltfNode
+    pub fn submit(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture_bind_group_layout: &wgpu::BindGroupLayout,
+        model_bind_group_layout: &wgpu::BindGroupLayout,
+    ) {
+        log::info!("Node #{}: requesting texture bind group", self.id);
+        if self.material.bind_group.is_none() {
+            self.material
+                .submit(device, queue, texture_bind_group_layout);
+        }
+
+        log::info!("Node #{}: requesting mesh buffers", self.id);
+        if let Some(mesh) = &mut self.mesh {
+            if mesh.buffers.is_none() {
+                mesh.submit(device);
+            }
+        }
+
+        log::info!(
+            "Node #{}: requesting uniform buffer and uniform bind group",
+            self.id
+        );
+        let model = self.model_matrix().to_cols_array_2d();
+        self.buffer = Some(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Model Uniform Buffer"),
+                contents: bytecast::to_bytes(&model),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }),
+        );
+        self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Model Uniform Bind Group"),
+            layout: &model_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.buffer.as_ref().unwrap().as_entire_binding(),
+            }],
+        }));
+
+        for child in &mut self.children {
+            child.submit(
+                device,
+                queue,
+                texture_bind_group_layout,
+                model_bind_group_layout,
+            );
+        }
+    }
+
+    pub fn load_from_slice(data: &[u8]) -> anyhow::Result<Self> {
+        let (gltf, buffers, images) = gltf::import_slice(data)?;
+        let mut root_node = GltfNode::default();
+        for scene in gltf.scenes() {
+            for node in scene.nodes() {
+                root_node.push(build(&node, &buffers, &images, 0));
+            }
+        }
+        Ok(root_node)
+    }
+
+    pub fn load_from_path(path: &'static str) -> anyhow::Result<Self> {
+        let (gltf, buffers, images) = gltf::import(path)?;
+        let mut root_node = GltfNode::default();
+        for scene in gltf.scenes() {
+            for node in scene.nodes() {
+                root_node.push(build(&node, &buffers, &images, 0));
+            }
+        }
+        Ok(root_node)
+    }
+
+    pub fn push(&mut self, child: GltfNode) {
+        self.children.push(child);
+    }
+
+    pub fn model_matrix(&self) -> glam::Mat4 {
+        glam::Mat4::from_translation(self.position)
+            * glam::Mat4::from_quat(self.rotation)
+            * glam::Mat4::from_scale(self.scale)
+    }
+
+    pub fn set_position(&mut self, position: glam::Vec3) {
+        self.position = position;
+    }
+
+    pub fn set_rotation(&mut self, rotation: glam::Quat) {
+        self.rotation = rotation;
+    }
+
+    pub fn set_scale(&mut self, scale: glam::Vec3) {
+        self.scale = scale;
+    }
+
+    pub fn prepare_draw(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: glam::Mat4,
+    ) -> Vec<RenderResource> {
+        let t_model = model * self.model_matrix();
+        let uniform_data = t_model.to_cols_array_2d();
+        let model_uniform = bytecast::to_bytes(&uniform_data);
+
+        // Update uniform buffer
+        queue.write_buffer(
+            &self
+                .buffer
+                .as_ref()
+                .expect("No buffer found! Is node initialized?"),
+            0,
+            bytecast::to_bytes(&model_uniform),
+        );
+
+        let mut resources = vec![];
+        if let Some(mesh) = &self.mesh {
+            if let Some((vb, ib)) = &mesh.buffers {
+                if let (Some(texture_bind_group), Some(model_bind_group)) =
+                    (&self.material.bind_group, &self.bind_group)
+                {
+                    resources.push(RenderResource {
+                        vertex_buffer: vb,
+                        index_buffer: ib,
+                        model_bind_group,
+                        texture_bind_group,
+                    });
+
+                } else {
+                    log::warn!(
+                        "Node #{}: buffers or(and) bind groups not initialized, skipping.",
+                        self.id
+                    );
+                }
+            } else {
+                log::warn!("Node #{}: mesh not initialized, skipping.", self.id);
+            }
+        }
+
+        for child in &self.children {
+            for resource in child.prepare_draw(device, queue, model) {
+                resources.push(resource);
+            }
+        }
+        resources
     }
 }

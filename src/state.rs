@@ -129,16 +129,16 @@ impl<'a> State<'a> {
 
     pub fn update(&self) {}
 
-    pub fn render(
+    fn try_render(
         &self,
         vertex_buffer: &wgpu::Buffer,
         index_buffer: &wgpu::Buffer,
         texture_bind_group: &wgpu::BindGroup,
-        camera_bind_group: &wgpu::BindGroup,
         model_bind_group: &wgpu::BindGroup,
+        camera_bind_group: &wgpu::BindGroup,
     ) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture()?;
-        let view = output
+        let surface_output = self.surface.get_current_texture()?;
+        let surface_view = surface_output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self
@@ -146,11 +146,13 @@ impl<'a> State<'a> {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
+
+        // Begin render pass
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &surface_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -177,8 +179,39 @@ impl<'a> State<'a> {
             render_pass.draw_indexed(0..index_num, 0, 0..1);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        surface_output.present();
         Ok(())
+    }
+
+    pub fn render(&mut self,
+        vertex_buffer: &wgpu::Buffer,
+        index_buffer: &wgpu::Buffer,
+        texture_bind_group: &wgpu::BindGroup,
+        model_bind_group: &wgpu::BindGroup,
+        camera_bind_group: &wgpu::BindGroup,
+    ) {
+        match self.try_render(
+            &vertex_buffer,
+            &index_buffer,
+            &texture_bind_group,
+            &camera_bind_group,
+            &model_bind_group,
+        ) {
+            Ok(_) => (),
+            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+                self.resize(self.size);
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                log::error!("Out Of Memory");
+                std::process::exit(1);
+            }
+            Err(wgpu::SurfaceError::Timeout) => {
+                log::warn!("Timeout");
+            }
+            Err(err) => {
+                log::warn!("{:?}", err);
+            }
+        }
     }
 
     pub fn request_texture_rgba8(
@@ -290,7 +323,7 @@ impl<'a> State<'a> {
                     },
                     count: None,
                 },
-                // Metallic-Roughness
+                // Metallic
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -317,7 +350,7 @@ impl<'a> State<'a> {
                     },
                     count: None,
                 },
-                // AO
+                // Roughness
                 wgpu::BindGroupLayoutEntry {
                     binding: 9,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -336,6 +369,32 @@ impl<'a> State<'a> {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 11,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 14,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,

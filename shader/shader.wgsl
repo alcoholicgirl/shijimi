@@ -41,7 +41,7 @@ var s_ao: sampler;
 @group(0) @binding(14)
 var<uniform> m_ao: vec4f;
 
-// Camera
+// Camera View
 struct CameraUniform {
     @location(0) view_proj: mat4x4<f32> 
 }
