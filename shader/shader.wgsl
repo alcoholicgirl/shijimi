@@ -1,6 +1,6 @@
-// Fundamental PBR Shader
-// PBR Textures
+// Fundamental Cook-Torrance PBR Shader
 
+// PBR Textures
 // Albedo
 @group(0) @binding(0)
 var t_albedo: texture_2d<f32>;
@@ -41,13 +41,13 @@ var s_ao: sampler;
 @group(0) @binding(14)
 var<uniform> m_ao: vec4f;
 
-// Camera View
-struct CameraUniform {
-    @location(0) view_proj: mat4x4<f32>,
-    @location(1) view_pos: vec3f
+// View
+struct ViewUniform {
+    @location(0) projection: mat4x4<f32>,
+    @location(1) position: vec3f
 }
 @group(1) @binding(0)
-var<uniform> camera: CameraUniform;
+var<uniform> view: ViewUniform;
 
 // Model
 struct ModelUniform {
@@ -55,6 +55,21 @@ struct ModelUniform {
 }
 @group(2) @binding(0)
 var<uniform> model: ModelUniform;
+
+// Lights
+const MAX_POINT_LIGHTS : u32 = 32u;
+const MAX_DIR_LIGHTS : u32 = 16u;
+struct PointLight {
+    @location(0) position: vec3f
+}
+struct DirLight {
+    @location(0) direction: vec3f,
+}
+
+@group(3) @binding(0)
+var<uniform> point_lights: array<PointLight, MAX_POINT_LIGHTS>;
+@group(3) @binding(1)
+var<uniform> dir_lights: array<DirLight, MAX_DIR_LIGHTS>;
 
 
 struct VertexInput {
@@ -66,9 +81,10 @@ struct VertexInput {
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4f,
-    @location(0) texcoord: vec2f,
-    @location(1) normal: vec3f,
-    @location(2) tangent: vec4f,
+    @location(0) position: vec3f,
+    @location(1) texcoord: vec2f,
+    @location(2) normal: vec3f,
+    @location(3) tangent: vec4f,
 };
 
 @vertex
@@ -76,8 +92,10 @@ fn vs_main(
     in: VertexInput,
 ) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = camera.view_proj * model.model * vec4(in.position, 1.0);
+    var position = model.model * vec4(in.position, 1.0);
+    out.clip_position = view.projection * position;
     out.texcoord = in.texcoord;
+    out.position = position.xyz;
     out.normal = in.normal;
     out.tangent = in.tangent;
     return out;
@@ -85,5 +103,14 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+    // Normal Mapping
+    var normal = normalize(in.normal);
+    var tangent = normalize(in.tangent.xyz);
+    var bitangent = normalize(cross(normal, tangent)) * in.tangent.w;
+    var pbr_normal = textureSample(t_normal, s_normal, in.texcoord).xyz - vec3(0.5);
+    var tbn = mat3x3(tangent, bitangent, normal);
+    normal = normalize(tbn * pbr_normal);
+
+
     return textureSample(t_albedo, s_albedo, in.texcoord);
 }

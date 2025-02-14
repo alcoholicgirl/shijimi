@@ -1,4 +1,6 @@
-use crate::{bytecast, material::Material, texture::Texture, vertex::Vertex};
+use crate::{
+    bytecast, material::Material, spatial::Spatial, texture::Texture, vertex::Vertex,
+};
 use gltf::mesh::util::*;
 use iter_tools::dependency::itertools::izip;
 use wgpu::util::DeviceExt;
@@ -10,10 +12,10 @@ pub struct Mesh {
     buffers: Option<(wgpu::Buffer, wgpu::Buffer)>,
 }
 
-pub struct GltfNode {
+pub struct MeshNode {
     id: usize,
     name: Option<String>,
-    children: Vec<GltfNode>,
+    children: Vec<MeshNode>,
     mesh: Option<Mesh>,
     material: Material,
     position: glam::Vec3,
@@ -23,7 +25,7 @@ pub struct GltfNode {
     model_bind_group: Option<wgpu::BindGroup>,
 }
 
-pub struct RenderResource<'a> {
+pub struct MeshResource<'a> {
     pub vertex_buffer: &'a wgpu::Buffer,
     pub index_buffer: &'a wgpu::Buffer,
     pub texture_bind_group: &'a wgpu::BindGroup,
@@ -35,7 +37,7 @@ fn build(
     buffers: &Vec<gltf::buffer::Data>,
     images: &Vec<gltf::image::Data>,
     depth: u32,
-) -> GltfNode {
+) -> MeshNode {
     let intent = || {
         for _ in 0..depth {
             print!(" ");
@@ -53,7 +55,7 @@ fn build(
     );
 
     let (position, rotation, scale) = node.transform().decomposed();
-    let mut gltfnode = GltfNode {
+    let mut gltfnode = MeshNode {
         position: glam::Vec3::from(position),
         rotation: glam::Quat::from_array(rotation),
         scale: glam::Vec3::from(scale),
@@ -374,7 +376,7 @@ impl Mesh {
     }
 }
 
-impl GltfNode {
+impl MeshNode {
     // Initialize GltfNode
     pub fn submit(
         &mut self,
@@ -430,7 +432,7 @@ impl GltfNode {
 
     pub fn load_from_slice(data: &[u8]) -> anyhow::Result<Self> {
         let (gltf, buffers, images) = gltf::import_slice(data)?;
-        let mut root_node = GltfNode::default();
+        let mut root_node = MeshNode::default();
         for scene in gltf.scenes() {
             for node in scene.nodes() {
                 root_node.push(build(&node, &buffers, &images, 0));
@@ -441,7 +443,7 @@ impl GltfNode {
 
     pub fn load_from_path(path: &'static str) -> anyhow::Result<Self> {
         let (gltf, buffers, images) = gltf::import(path)?;
-        let mut root_node = GltfNode::default();
+        let mut root_node = MeshNode::default();
         for scene in gltf.scenes() {
             for node in scene.nodes() {
                 root_node.push(build(&node, &buffers, &images, 0));
@@ -450,7 +452,7 @@ impl GltfNode {
         Ok(root_node)
     }
 
-    pub fn push(&mut self, child: GltfNode) {
+    pub fn push(&mut self, child: MeshNode) {
         self.children.push(child);
     }
 
@@ -458,18 +460,6 @@ impl GltfNode {
         glam::Mat4::from_translation(self.position)
             * glam::Mat4::from_quat(self.rotation)
             * glam::Mat4::from_scale(self.scale)
-    }
-
-    pub fn set_position(&mut self, position: glam::Vec3) {
-        self.position = position;
-    }
-
-    pub fn set_rotation(&mut self, rotation: glam::Quat) {
-        self.rotation = rotation;
-    }
-
-    pub fn set_scale(&mut self, scale: glam::Vec3) {
-        self.scale = scale;
     }
 
     pub fn apply_model(&self, queue: &wgpu::Queue, model: glam::Mat4) {
@@ -490,14 +480,14 @@ impl GltfNode {
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-    ) -> Vec<RenderResource> {
+    ) -> Vec<MeshResource> {
         let mut resources = vec![];
         if let Some(mesh) = &self.mesh {
             if let Some((vb, ib)) = &mesh.buffers {
                 if let (Some(texture_bind_group), Some(model_bind_group)) =
                     (&self.material.bind_group, &self.model_bind_group)
                 {
-                    resources.push(RenderResource {
+                    resources.push(MeshResource {
                         vertex_buffer: vb,
                         index_buffer: ib,
                         model_bind_group,
@@ -523,7 +513,7 @@ impl GltfNode {
     }
 }
 
-impl Default for GltfNode {
+impl Default for MeshNode {
     fn default() -> Self {
         Self {
             id: 0,
@@ -537,5 +527,31 @@ impl Default for GltfNode {
             rotation: glam::Quat::IDENTITY,
             scale: glam::Vec3::ONE,
         }
+    }
+}
+
+impl Spatial for MeshNode {
+    fn set_position(&mut self, position: glam::Vec3) {
+        self.position = position;
+    }
+
+    fn set_rotation(&mut self, rotation: glam::Quat) {
+        self.rotation = rotation;
+    }
+
+    fn set_scale(&mut self, scale: glam::Vec3) {
+        self.scale = scale;
+    }
+
+    fn get_position(&self) -> glam::Vec3 {
+        self.position
+    }
+
+    fn get_rotation(&self) -> glam::Quat {
+        self.rotation
+    }
+
+    fn get_scale(&self) -> glam::Vec3 {
+        self.scale
     }
 }

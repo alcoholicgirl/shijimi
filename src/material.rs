@@ -19,19 +19,23 @@ impl Material {
         texture_bind_group_layout: &wgpu::BindGroupLayout,
     ) {
         if self.albedo.is_none() {
-            self.albedo = Some(Texture::from_rgba8([0x00u8; 4]));
+            self.albedo = Some(Texture::from_rgba8_bytes([0x00u8; 4].as_slice(), 1, 1));
         }
         if self.normal.is_none() {
-            self.normal = Some(Texture::from_rgba8([0x80, 0x80, 0xFF, 0xFF]));
+            self.normal = Some(Texture::from_rgba8_bytes(
+                [0x80, 0x80, 0xFF, 0xFF].as_slice(),
+                1,
+                1,
+            ));
         }
         if self.metallic.is_none() {
-            self.metallic = Some(Texture::from_rgba8([0x00u8; 4]));
+            self.metallic = Some(Texture::from_rgba8_bytes([0x00u8; 4].as_slice(), 1, 1));
         }
         if self.roughness.is_none() {
-            self.roughness = Some(Texture::from_rgba8([0x00u8; 4]));
+            self.roughness = Some(Texture::from_rgba8_bytes([0x00u8; 4].as_slice(), 1, 1));
         }
         if self.ao.is_none() {
-            self.ao = Some(Texture::from_rgba8([0x00u8; 4]));
+            self.ao = Some(Texture::from_rgba8_bytes([0x00u8; 4].as_slice(), 1, 1));
         }
 
         self.albedo.as_mut().unwrap().submit(device, queue);
@@ -66,9 +70,10 @@ impl Material {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: match &self.albedo.as_ref().unwrap() {
-                        Texture::Online { modulation: Some((buffer, _)), .. } => {
-                            buffer.as_entire_binding()
-                        }
+                        Texture::Online {
+                            modulation: Some((buffer, _)),
+                            ..
+                        } => buffer.as_entire_binding(),
                         _ => unreachable!(),
                     },
                 },
@@ -94,9 +99,10 @@ impl Material {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: match &self.normal.as_ref().unwrap() {
-                        Texture::Online { modulation: Some((buffer, _)), .. } => {
-                            buffer.as_entire_binding()
-                        }
+                        Texture::Online {
+                            modulation: Some((buffer, _)),
+                            ..
+                        } => buffer.as_entire_binding(),
                         _ => unreachable!(),
                     },
                 },
@@ -122,9 +128,10 @@ impl Material {
                 wgpu::BindGroupEntry {
                     binding: 8,
                     resource: match &self.metallic.as_ref().unwrap() {
-                        Texture::Online { modulation: Some((buffer, _)), .. } => {
-                            buffer.as_entire_binding()
-                        }
+                        Texture::Online {
+                            modulation: Some((buffer, _)),
+                            ..
+                        } => buffer.as_entire_binding(),
                         _ => unreachable!(),
                     },
                 },
@@ -150,9 +157,10 @@ impl Material {
                 wgpu::BindGroupEntry {
                     binding: 11,
                     resource: match &self.roughness.as_ref().unwrap() {
-                        Texture::Online { modulation: Some((buffer, _)), .. } => {
-                            buffer.as_entire_binding()
-                        }
+                        Texture::Online {
+                            modulation: Some((buffer, _)),
+                            ..
+                        } => buffer.as_entire_binding(),
                         _ => unreachable!(),
                     },
                 },
@@ -176,9 +184,10 @@ impl Material {
                 wgpu::BindGroupEntry {
                     binding: 14,
                     resource: match self.ao.as_ref().unwrap() {
-                        Texture::Online { modulation: Some((buffer, _)), .. } => {
-                            buffer.as_entire_binding()
-                        }
+                        Texture::Online {
+                            modulation: Some((buffer, _)),
+                            ..
+                        } => buffer.as_entire_binding(),
                         _ => unreachable!(),
                     },
                 },

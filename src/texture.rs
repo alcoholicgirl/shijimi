@@ -10,7 +10,7 @@ pub enum Texture {
         modulation: [f32; 4],
     },
     Online {
-        handle: wgpu::Texture,
+        texture: wgpu::Texture,
         view: wgpu::TextureView,
         sampler: wgpu::Sampler,
         modulation: Option<(wgpu::Buffer, [f32; 4])>,
@@ -58,11 +58,11 @@ impl Texture {
             );
             let tex_view = tex_buf.create_view(&wgpu::TextureViewDescriptor::default());
             let tex_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                address_mode_w: wgpu::AddressMode::Repeat,
                 mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Linear,
                 mipmap_filter: wgpu::FilterMode::Nearest,
                 ..Default::default()
             });
@@ -73,7 +73,7 @@ impl Texture {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
             *self = Texture::Online {
-                handle: tex_buf,
+                texture: tex_buf,
                 view: tex_view,
                 sampler: tex_sampler,
                 modulation: Some((buffer, *modulation)),
@@ -81,15 +81,11 @@ impl Texture {
         }
     }
 
-    pub fn from_rgba8(rgba: [u8; 4]) -> Self {
-        Self::Offline {
-            width: 1,
-            height: 1,
-            data: rgba.to_vec(),
-            modulation: [1.0; 4],
-        }
+    // RGBA8
+    pub fn from_rgba8_bytes(data: &[u8], width: u32, height: u32) -> Self {
+        Self::Offline { width, height, data: data.to_vec(), modulation: [1.0; 4] }
     }
-
+    
     pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
     pub fn create_depth_buffer(device: &wgpu::Device, width: u32, height: u32) -> Self {
         let size = wgpu::Extent3d {
@@ -116,24 +112,25 @@ impl Texture {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Nearest,
-            compare: Some(wgpu::CompareFunction::LessEqual), // 5.
+            compare: Some(wgpu::CompareFunction::LessEqual),
             lod_min_clamp: 0.0,
             lod_max_clamp: 200.0,
             ..Default::default()
         });
         Self::Online {
-            handle: texture,
+            texture,
             view,
             sampler,
             modulation: None,
         }
     }
+
 }
 
 impl Drop for Texture {
     fn drop(&mut self) {
-        if let Texture::Online { handle, .. } = self {
-            handle.destroy();
+        if let Texture::Online { texture, .. } = self {
+            texture.destroy();
         }
     }
 }

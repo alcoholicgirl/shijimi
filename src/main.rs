@@ -1,9 +1,11 @@
 use wgpu::util::DeviceExt;
 
 mod bytecast;
-mod camera;
-mod gltfnode;
+mod view;
+mod light;
 mod material;
+mod mesh;
+mod spatial;
 mod state;
 mod texture;
 mod vertex;
@@ -15,9 +17,9 @@ fn main() -> anyhow::Result<()> {
     let window = winit::window::WindowBuilder::new().build(&event_loop)?;
     let mut state = async_std::task::block_on(async { state::State::new(&window).await.unwrap() });
     let mut surface_configured = false;
-    let mut node = gltfnode::GltfNode::load_from_path("assets/model/mushroom/scene.gltf")?;
+    let mut node = mesh::MeshNode::load_from_path("assets/model/mushroom/scene.gltf")?;
 
-    let mut camera = camera::Camera::default();
+    let mut camera = view::View::default();
     let aspect_ratio = state.size.width as f32 / state.size.height as f32;
     let camera_buffer = state
         .device
@@ -27,9 +29,9 @@ fn main() -> anyhow::Result<()> {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         });
 
-    let camera_bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+    let view_bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Camera Bind Group"),
-        layout: &state.camera_bind_group_layout,
+        layout: &state.view_bind_group_layout,
         entries: &[wgpu::BindGroupEntry {
             binding: 0,
             resource: camera_buffer.as_entire_binding(),
@@ -84,7 +86,7 @@ fn main() -> anyhow::Result<()> {
                                 }) * glam::Mat4::from_scale(glam::Vec3::ONE * 0.5),
                             );
                             let resources = node.request_resources(&state.device, &state.queue);
-                            state.render(resources.iter(), &camera_bind_group);
+                            state.render(resources.iter(), [].iter(), &view_bind_group);
                         }
                     }
                     winit::event::WindowEvent::CloseRequested => {

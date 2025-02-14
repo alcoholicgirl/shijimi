@@ -1,4 +1,4 @@
-use crate::{gltfnode::RenderResource, texture::Texture};
+use crate::{light::LightResource, mesh::MeshResource, texture::Texture, vertex::Vertex};
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -8,10 +8,11 @@ pub struct State<'a> {
 
     // Pipeline & Bind Group Layouts
     pub texture_bind_group_layout: wgpu::BindGroupLayout,
-    pub camera_bind_group_layout: wgpu::BindGroupLayout,
+    pub view_bind_group_layout: wgpu::BindGroupLayout,
     pub model_bind_group_layout: wgpu::BindGroupLayout,
 
     depth_buffer: Texture,
+    shadow_mapping_pipeline: wgpu::RenderPipeline,
     render_pipeline: wgpu::RenderPipeline,
 
     pub size: winit::dpi::PhysicalSize<u32>,
@@ -51,12 +52,12 @@ impl<'a> State<'a> {
             .await
             .unwrap();
 
-        // Render Pipeline
+        // Main Render Pipeline
         let shader = device.create_shader_module(wgpu::include_wgsl!("../shader/shader.wgsl"));
         let texture_bind_group_layout =
             device.create_bind_group_layout(&Self::TEXTURE_BIND_GROUP_LAYOUT_DESC);
-        let camera_bind_group_layout =
-            device.create_bind_group_layout(&Self::CAMERA_BIND_GROUP_LAYOUT_DESC);
+        let view_bind_group_layout =
+            device.create_bind_group_layout(&Self::VIEW_BIND_GROUP_LAYOUT_DESC);
         let model_bind_group_layout =
             device.create_bind_group_layout(&Self::MODEL_BIND_GROUP_LAYOUT_DESC);
 
@@ -65,11 +66,12 @@ impl<'a> State<'a> {
                 label: Some("Render Pipeline Layout"),
                 bind_group_layouts: &[
                     &texture_bind_group_layout,
-                    &camera_bind_group_layout,
+                    &view_bind_group_layout,
                     &model_bind_group_layout,
                 ],
                 push_constant_ranges: &[],
             });
+
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
@@ -77,7 +79,7 @@ impl<'a> State<'a> {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[crate::vertex::Vertex::desc()],
+                buffers: &[Vertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -105,26 +107,69 @@ impl<'a> State<'a> {
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
+            multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
         });
-
         let depth_buffer = Texture::create_depth_buffer(&device, config.width, config.height);
+
+        // Shadow Mapping Pipeline
+        let sm_shader =
+            device.create_shader_module(wgpu::include_wgsl!("../shader/shadow_mapping.wgsl"));
+        let sm_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Shadow Mapping Pipeline Layout"),
+            bind_group_layouts: &[&view_bind_group_layout, &model_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let shadow_mapping_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Shadow Mapping Pipeline"),
+                layout: Some(&sm_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &sm_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[Vertex::desc()],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &sm_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    unclipped_depth: false,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: Texture::DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
+
         Ok(Self {
             surface,
             device,
             queue,
             config,
             texture_bind_group_layout,
-            camera_bind_group_layout,
+            view_bind_group_layout,
             model_bind_group_layout,
-            render_pipeline,
             depth_buffer,
+            render_pipeline,
+            shadow_mapping_pipeline,
             size,
             window,
         })
@@ -148,8 +193,9 @@ impl<'a> State<'a> {
 
     fn try_render(
         &self,
-        render_resources: std::slice::Iter<'_, RenderResource<'_>>,
-        camera_bind_group: &wgpu::BindGroup,
+        mesh_resources: std::slice::Iter<'_, MeshResource<'_>>,
+        light_resources: std::slice::Iter<'_, LightResource<'_>>,
+        view_bind_group: &wgpu::BindGroup,
     ) -> Result<(), wgpu::SurfaceError> {
         let surface_output = self.surface.get_current_texture()?;
         let surface_view = surface_output
@@ -160,8 +206,45 @@ impl<'a> State<'a> {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
+        // Shadow mapping
+        {
+            for lightnode in light_resources {
+                if let Some(sm_buffer) = &lightnode.light.sm_buffer {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Shadow Mapping Pass"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &sm_buffer.sm_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                    render_pass.set_pipeline(&self.shadow_mapping_pipeline);
+                    render_pass.set_bind_group(0, Some(&lightnode.light.view_bind_group), &[]);
+                    
+                    for resource in mesh_resources.clone() {
+                        let (vertex_buffer, index_buffer, model_bind_group) = (
+                            resource.vertex_buffer,
+                            resource.index_buffer,
+                            resource.model_bind_group,
+                        );
+                        render_pass.set_bind_group(1, model_bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                        render_pass
+                            .set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
-        // Begin render pass
+                        let index_num =
+                            (index_buffer.size() / std::mem::size_of::<u32>() as u64) as u32;
+                        render_pass.draw_indexed(0..index_num, 0, 0..1);
+                    }
+                }
+            }
+        }
+        // Render pass
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -193,7 +276,7 @@ impl<'a> State<'a> {
             });
             render_pass.set_pipeline(&self.render_pipeline);
 
-            for resource in render_resources {
+            for resource in mesh_resources {
                 let (vertex_buffer, index_buffer, texture_bind_group, model_bind_group) = (
                     resource.vertex_buffer,
                     resource.index_buffer,
@@ -202,7 +285,7 @@ impl<'a> State<'a> {
                 );
                 // bind groups
                 render_pass.set_bind_group(0, texture_bind_group, &[]);
-                render_pass.set_bind_group(1, camera_bind_group, &[]);
+                render_pass.set_bind_group(1, view_bind_group, &[]);
                 render_pass.set_bind_group(2, model_bind_group, &[]);
 
                 render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
@@ -218,10 +301,11 @@ impl<'a> State<'a> {
 
     pub fn render(
         &mut self,
-        render_resources: std::slice::Iter<'_, RenderResource<'_>>,
-        camera_bind_group: &wgpu::BindGroup,
+        render_resources: std::slice::Iter<'_, MeshResource<'_>>,
+        light_resources: std::slice::Iter<'_, LightResource<'_>>,
+        view_bind_group: &wgpu::BindGroup,
     ) {
-        match self.try_render(render_resources, camera_bind_group) {
+        match self.try_render(render_resources, light_resources, view_bind_group) {
             Ok(_) => (),
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
                 self.resize(self.size);
@@ -238,57 +322,6 @@ impl<'a> State<'a> {
             }
         }
     }
-
-    pub fn request_texture_rgba8(
-        &self,
-        data: &[u8],
-    ) -> anyhow::Result<(wgpu::TextureView, wgpu::Sampler)> {
-        let tex_img = image::load_from_memory(data)?.to_rgba8();
-        let tex_size = wgpu::Extent3d {
-            width: tex_img.dimensions().0,
-            height: tex_img.dimensions().1,
-            depth_or_array_layers: 1,
-        };
-        let tex_buf: wgpu::Texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Texture"),
-            size: tex_size,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            mip_level_count: 1,
-            view_formats: &[],
-        });
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfoBase {
-                texture: &tex_buf,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &tex_img,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4u32 * tex_img.dimensions().0),
-                rows_per_image: Some(tex_img.dimensions().1),
-            },
-            tex_size,
-        );
-
-        let tex_view = tex_buf.create_view(&wgpu::TextureViewDescriptor::default());
-        let tex_sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-
-        Ok((tex_view, tex_sampler))
-    }
-
     // Bind Group Layouts
     pub const TEXTURE_BIND_GROUP_LAYOUT_DESC: wgpu::BindGroupLayoutDescriptor<'a> =
         wgpu::BindGroupLayoutDescriptor {
@@ -431,12 +464,12 @@ impl<'a> State<'a> {
             ],
         };
 
-    pub const CAMERA_BIND_GROUP_LAYOUT_DESC: wgpu::BindGroupLayoutDescriptor<'a> =
+    pub const VIEW_BIND_GROUP_LAYOUT_DESC: wgpu::BindGroupLayoutDescriptor<'a> =
         wgpu::BindGroupLayoutDescriptor {
-            label: Some("Camera Bind Group Layout"),
+            label: Some("View Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -448,7 +481,7 @@ impl<'a> State<'a> {
 
     pub const MODEL_BIND_GROUP_LAYOUT_DESC: wgpu::BindGroupLayoutDescriptor<'a> =
         wgpu::BindGroupLayoutDescriptor {
-            label: Some("Camera Bind Group Layout"),
+            label: Some("Model Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,
