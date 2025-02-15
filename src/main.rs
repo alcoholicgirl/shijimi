@@ -1,7 +1,7 @@
+use spatial::Spatial;
 use wgpu::util::DeviceExt;
 
 mod bytecast;
-mod view;
 mod light;
 mod material;
 mod mesh;
@@ -9,6 +9,7 @@ mod spatial;
 mod state;
 mod texture;
 mod vertex;
+mod view;
 use bytecast::*;
 
 fn main() -> anyhow::Result<()> {
@@ -28,7 +29,6 @@ fn main() -> anyhow::Result<()> {
             contents: cast_bytes(&camera.uniform(aspect_ratio)),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         });
-
     let view_bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Camera Bind Group"),
         layout: &state.view_bind_group_layout,
@@ -37,15 +37,17 @@ fn main() -> anyhow::Result<()> {
             resource: camera_buffer.as_entire_binding(),
         }],
     });
-
     node.submit(
         &state.device,
         &state.queue,
         &state.texture_bind_group_layout,
         &state.model_bind_group_layout,
     );
-
+    let mut root_node = mesh::MeshNode::null();
+    root_node.push(node);
+    let mut node = root_node;
     let mut frame = 0;
+
     event_loop.run(move |ev, control_flow| match ev {
         winit::event::Event::WindowEvent {
             window_id,
@@ -66,9 +68,11 @@ fn main() -> anyhow::Result<()> {
                         {
                             let aspect_ratio = state.size.width as f32 / state.size.height as f32;
                             frame += 1;
-                            let ftime = frame as f32 * 0.002;
+                            let ftime = frame as f32 * 0.004;
+                            node.set_scale(glam::Vec3 { x: 1.0, y: 1.0 + (2.0 * ftime).sin() * 0.4, z: 1.0 });
+
                             camera.position =
-                                glam::Mat3::from_rotation_y(ftime * 0.5) * glam::Vec3::Z * 2.0;
+                                glam::Mat3::from_rotation_y(ftime * 0.2) * glam::Vec3::Z * 2.0;
                             camera.look_at(glam::Vec3::ZERO);
                             let camera_uniform = camera.uniform(aspect_ratio);
                             state.queue.write_buffer(
@@ -85,8 +89,8 @@ fn main() -> anyhow::Result<()> {
                                     z: 0.0,
                                 }) * glam::Mat4::from_scale(glam::Vec3::ONE * 0.5),
                             );
-                            let resources = node.request_resources(&state.device, &state.queue);
-                            state.render(resources.iter(), [].iter(), &view_bind_group);
+                            let resources = node.request_handles(&state.device, &state.queue);
+                            state.render(&resources, &view_bind_group);
                         }
                     }
                     winit::event::WindowEvent::CloseRequested => {

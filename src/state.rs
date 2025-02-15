@@ -1,4 +1,4 @@
-use crate::{light::LightResource, mesh::MeshResource, texture::Texture, vertex::Vertex};
+use crate::{mesh::MeshAccessor, texture::Texture, vertex::Vertex};
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -115,7 +115,7 @@ impl<'a> State<'a> {
 
         // Shadow Mapping Pipeline
         let sm_shader =
-            device.create_shader_module(wgpu::include_wgsl!("../shader/shadow_mapping.wgsl"));
+            device.create_shader_module(wgpu::include_wgsl!("../shader/cast_shadow.wgsl"));
         let sm_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Shadow Mapping Pipeline Layout"),
             bind_group_layouts: &[&view_bind_group_layout, &model_bind_group_layout],
@@ -158,7 +158,6 @@ impl<'a> State<'a> {
                 multiview: None,
                 cache: None,
             });
-
         Ok(Self {
             surface,
             device,
@@ -193,8 +192,7 @@ impl<'a> State<'a> {
 
     fn try_render(
         &self,
-        mesh_resources: std::slice::Iter<'_, MeshResource<'_>>,
-        light_resources: std::slice::Iter<'_, LightResource<'_>>,
+        meshes: &Vec<MeshAccessor>,
         view_bind_group: &wgpu::BindGroup,
     ) -> Result<(), wgpu::SurfaceError> {
         let surface_output = self.surface.get_current_texture()?;
@@ -208,41 +206,7 @@ impl<'a> State<'a> {
             });
         // Shadow mapping
         {
-            for lightnode in light_resources {
-                if let Some(sm_buffer) = &lightnode.light.sm_buffer {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Shadow Mapping Pass"),
-                        color_attachments: &[],
-                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &sm_buffer.sm_view,
-                            depth_ops: Some(wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(1.0),
-                                store: wgpu::StoreOp::Store,
-                            }),
-                            stencil_ops: None,
-                        }),
-                        ..Default::default()
-                    });
-                    render_pass.set_pipeline(&self.shadow_mapping_pipeline);
-                    render_pass.set_bind_group(0, Some(&lightnode.light.view_bind_group), &[]);
-                    
-                    for resource in mesh_resources.clone() {
-                        let (vertex_buffer, index_buffer, model_bind_group) = (
-                            resource.vertex_buffer,
-                            resource.index_buffer,
-                            resource.model_bind_group,
-                        );
-                        render_pass.set_bind_group(1, model_bind_group, &[]);
-                        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                        render_pass
-                            .set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
-                        let index_num =
-                            (index_buffer.size() / std::mem::size_of::<u32>() as u64) as u32;
-                        render_pass.draw_indexed(0..index_num, 0, 0..1);
-                    }
-                }
-            }
         }
         // Render pass
         {
@@ -276,7 +240,7 @@ impl<'a> State<'a> {
             });
             render_pass.set_pipeline(&self.render_pipeline);
 
-            for resource in mesh_resources {
+            for resource in meshes {
                 let (vertex_buffer, index_buffer, texture_bind_group, model_bind_group) = (
                     resource.vertex_buffer,
                     resource.index_buffer,
@@ -301,11 +265,10 @@ impl<'a> State<'a> {
 
     pub fn render(
         &mut self,
-        render_resources: std::slice::Iter<'_, MeshResource<'_>>,
-        light_resources: std::slice::Iter<'_, LightResource<'_>>,
+        meshes: &Vec<MeshAccessor>,
         view_bind_group: &wgpu::BindGroup,
     ) {
-        match self.try_render(render_resources, light_resources, view_bind_group) {
+        match self.try_render(meshes, view_bind_group) {
             Ok(_) => (),
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
                 self.resize(self.size);

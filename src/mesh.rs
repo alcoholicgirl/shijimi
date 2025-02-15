@@ -1,16 +1,7 @@
-use crate::{
-    bytecast, material::Material, spatial::Spatial, texture::Texture, vertex::Vertex,
-};
+use crate::{bytecast, material::Material, spatial::Spatial, texture::Texture, vertex::Vertex};
 use gltf::mesh::util::*;
 use iter_tools::dependency::itertools::izip;
 use wgpu::util::DeviceExt;
-
-#[allow(unused)]
-pub struct Mesh {
-    vertices: Vec<Vertex>,
-    indices: Vec<u32>,
-    buffers: Option<(wgpu::Buffer, wgpu::Buffer)>,
-}
 
 pub struct MeshNode {
     id: usize,
@@ -25,7 +16,14 @@ pub struct MeshNode {
     model_bind_group: Option<wgpu::BindGroup>,
 }
 
-pub struct MeshResource<'a> {
+pub struct Mesh {
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
+    buffers: Option<(wgpu::Buffer, wgpu::Buffer)>,
+}
+
+/// Referrence of resources needed for rendering a mesh such as `VBO`, `EBO`.
+pub struct MeshAccessor<'a> {
     pub vertex_buffer: &'a wgpu::Buffer,
     pub index_buffer: &'a wgpu::Buffer,
     pub texture_bind_group: &'a wgpu::BindGroup,
@@ -377,7 +375,7 @@ impl Mesh {
 }
 
 impl MeshNode {
-    // Initialize GltfNode
+    /// Initialize MeshNode
     pub fn submit(
         &mut self,
         device: &wgpu::Device,
@@ -476,18 +474,14 @@ impl MeshNode {
         }
     }
 
-    pub fn request_resources(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) -> Vec<MeshResource> {
+    pub fn request_handles(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<MeshAccessor> {
         let mut resources = vec![];
         if let Some(mesh) = &self.mesh {
             if let Some((vb, ib)) = &mesh.buffers {
                 if let (Some(texture_bind_group), Some(model_bind_group)) =
                     (&self.material.bind_group, &self.model_bind_group)
                 {
-                    resources.push(MeshResource {
+                    resources.push(MeshAccessor {
                         vertex_buffer: vb,
                         index_buffer: ib,
                         model_bind_group,
@@ -505,11 +499,17 @@ impl MeshNode {
         }
 
         for child in &self.children {
-            for resource in child.request_resources(device, queue) {
+            for resource in child.request_handles(device, queue) {
                 resources.push(resource);
             }
         }
         resources
+    }
+
+    pub fn null() -> Self {
+        Self {
+            ..Default::default()
+        }
     }
 }
 

@@ -57,20 +57,58 @@ struct ModelUniform {
 var<uniform> model: ModelUniform;
 
 // Lights
-const MAX_POINT_LIGHTS : u32 = 32u;
-const MAX_DIR_LIGHTS : u32 = 16u;
-struct PointLight {
-    @location(0) position: vec3f
-}
+// struct PointLight {
+//     @location(0) position: vec3f,
+//     @location(1) intensity: f32,
+//     @location(2) cast_shadow: u32,
+//     @location(3) color: vec4f,
+// }
+// struct DirLight {
+//     @location(0) direction: vec3f,
+//     @location(1) intensity: f32,
+//     @location(2) cast_shadow: u32,
+//     @location(3) color: vec4f,
+//     @location(4) coord_proj: mat4x4<f32>,
+// }
+// struct SpotLight {
+//     @location(0) position: vec3f,
+//     @location(1) direction: vec3f,
+//     @location(2) intensity: f32,
+//     @location(3) cast_shadow: u32,
+//     @location(4) color: vec4f,
+//     @location(5) coord_proj: mat4x4<f32>, 
+// }
+// @group(3) @binding(0)
+// var<storage> pointlights: array<PointLight>;
+// @group(3) @binding(1)
+// var t_pointlight: texture_depth_cube_array;
+// @group(3) @binding(2)
+// var s_pointlight: sampler;
+
+// @group(4) @binding(0)
+// var<storage> dirlights: array<DirLight>;
+// @group(4) @binding(1)
+// var t_dirlight: texture_depth_2d_array;
+// @group(4) @binding(2)
+// var s_dirlight: sampler;
+
+// @group(5) @binding(0)
+// var<storage> spotlights: array<SpotLight>;
+// @group(5) @binding(1)
+// var t_spotlight: texture_depth_2d_array;
+// @group(5) @binding(2)
+// var s_spotlight: sampler;
+
 struct DirLight {
-    @location(0) direction: vec3f,
+    @location(0) position: vec3f,
+    @location(1) direction: vec3f,
 }
-
 @group(3) @binding(0)
-var<uniform> point_lights: array<PointLight, MAX_POINT_LIGHTS>;
+var<uniform> light: DirLight;
 @group(3) @binding(1)
-var<uniform> dir_lights: array<DirLight, MAX_DIR_LIGHTS>;
-
+var t_sm: texture_depth_2d;
+@group(3) @binding(2)
+var s_sm: sampler;
 
 struct VertexInput {
     @location(0) position: vec3f,
@@ -101,6 +139,7 @@ fn vs_main(
     return out;
 }
 
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // Normal Mapping
@@ -110,7 +149,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     var pbr_normal = textureSample(t_normal, s_normal, in.texcoord).xyz - vec3(0.5);
     var tbn = mat3x3(tangent, bitangent, normal);
     normal = normalize(tbn * pbr_normal);
-
 
     return textureSample(t_albedo, s_albedo, in.texcoord);
 }
