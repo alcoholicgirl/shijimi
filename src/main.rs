@@ -1,3 +1,5 @@
+use light::LightServer;
+use mesh::MeshServer;
 use spatial::Spatial;
 use wgpu::util::DeviceExt;
 
@@ -9,7 +11,7 @@ mod spatial;
 mod state;
 mod texture;
 mod vertex;
-mod view;
+mod camera;
 use bytecast::*;
 
 fn main() -> anyhow::Result<()> {
@@ -18,9 +20,24 @@ fn main() -> anyhow::Result<()> {
     let window = winit::window::WindowBuilder::new().build(&event_loop)?;
     let mut state = async_std::task::block_on(async { state::State::new(&window).await.unwrap() });
     let mut surface_configured = false;
-    let mut node = mesh::MeshNode::load_from_path("assets/model/mushroom/scene.gltf")?;
 
-    let mut camera = view::View::default();
+    // Scene building
+    let mut mesh_server = MeshServer::new();
+    let mut light_server = LightServer::new(&state.device);
+    let dlight = light_server.request_light(
+        light::LightSource::Directional {
+            position: glam::vec3(0.0, 1.0, 0.0),
+            rotation: glam::Quat::from_rotation_y(15f32.to_radians()),
+            intensity: 1.0f32,
+            cast_shadow: true,
+            color: [1.0; 4],
+            ortho_window: (10.0, 10.0),
+            depth: 10.0f32,
+        },
+    );
+
+    let mut node = mesh::MeshNode::load_from_path("assets/model/mushroom/scene.gltf")?;
+    let mut camera = camera::Camera::default();
     let aspect_ratio = state.size.width as f32 / state.size.height as f32;
     let camera_buffer = state
         .device
@@ -43,9 +60,8 @@ fn main() -> anyhow::Result<()> {
         &state.texture_bind_group_layout,
         &state.model_bind_group_layout,
     );
-    let mut root_node = mesh::MeshNode::null();
-    root_node.push(node);
-    let mut node = root_node;
+
+    let mushroom_node = mesh_server.add_node(node);
     let mut frame = 0;
 
     event_loop.run(move |ev, control_flow| match ev {
@@ -66,10 +82,15 @@ fn main() -> anyhow::Result<()> {
                             return;
                         }
                         {
+                            let node = mesh_server.get_mut(mushroom_node).unwrap();
                             let aspect_ratio = state.size.width as f32 / state.size.height as f32;
                             frame += 1;
                             let ftime = frame as f32 * 0.004;
-                            node.set_scale(glam::Vec3 { x: 1.0, y: 1.0 + (2.0 * ftime).sin() * 0.4, z: 1.0 });
+                            node.set_scale(glam::Vec3 {
+                                x: 1.0,
+                                y: 1.0 + (2.0 * ftime).sin() * 0.4,
+                                z: 1.0,
+                            });
 
                             camera.position =
                                 glam::Mat3::from_rotation_y(ftime * 0.2) * glam::Vec3::Z * 2.0;
@@ -81,7 +102,7 @@ fn main() -> anyhow::Result<()> {
                                 bytecast::cast_bytes(&camera_uniform),
                             );
 
-                            node.apply_model(
+                            node.mesh.apply_model(
                                 &state.queue,
                                 glam::Mat4::from_translation(glam::Vec3 {
                                     x: 0.0,
@@ -89,8 +110,7 @@ fn main() -> anyhow::Result<()> {
                                     z: 0.0,
                                 }) * glam::Mat4::from_scale(glam::Vec3::ONE * 0.5),
                             );
-                            let resources = node.request_handles(&state.device, &state.queue);
-                            state.render(&resources, &view_bind_group);
+                            state.render(&mesh_server, &light_server, &view_bind_group);
                         }
                     }
                     winit::event::WindowEvent::CloseRequested => {

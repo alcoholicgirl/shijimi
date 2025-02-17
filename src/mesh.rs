@@ -16,18 +16,20 @@ pub struct MeshNode {
     model_bind_group: Option<wgpu::BindGroup>,
 }
 
+pub struct MeshClient {
+    entry: usize,
+    pub mesh: MeshNode,
+}
+
 pub struct Mesh {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
+    /// Vertex buffer and index buffer
     buffers: Option<(wgpu::Buffer, wgpu::Buffer)>,
 }
 
-/// Referrence of resources needed for rendering a mesh such as `VBO`, `EBO`.
-pub struct MeshAccessor<'a> {
-    pub vertex_buffer: &'a wgpu::Buffer,
-    pub index_buffer: &'a wgpu::Buffer,
-    pub texture_bind_group: &'a wgpu::BindGroup,
-    pub model_bind_group: &'a wgpu::BindGroup,
+pub struct MeshServer {
+    mesh_nodes: Vec<MeshClient>,
 }
 
 fn build(
@@ -474,19 +476,24 @@ impl MeshNode {
         }
     }
 
-    pub fn request_handles(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<MeshAccessor> {
-        let mut resources = vec![];
+    pub fn request_draw(
+        &self,
+        view_bind_group: &wgpu::BindGroup,
+        render_pass: &mut wgpu::RenderPass,
+    ) {
         if let Some(mesh) = &self.mesh {
             if let Some((vb, ib)) = &mesh.buffers {
                 if let (Some(texture_bind_group), Some(model_bind_group)) =
                     (&self.material.bind_group, &self.model_bind_group)
                 {
-                    resources.push(MeshAccessor {
-                        vertex_buffer: vb,
-                        index_buffer: ib,
-                        model_bind_group,
-                        texture_bind_group,
-                    });
+                    render_pass.set_bind_group(0, texture_bind_group, &[]);
+                    render_pass.set_bind_group(1, view_bind_group, &[]);
+                    render_pass.set_bind_group(2, model_bind_group, &[]);
+
+                    render_pass.set_vertex_buffer(0, vb.slice(..));
+                    render_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                    let index_num = (ib.size() / std::mem::size_of::<u32>() as u64) as u32;
+                    render_pass.draw_indexed(0..index_num, 0, 0..1);
                 } else {
                     log::warn!(
                         "Node #{}: buffers or(and) bind groups not initialized, skipping.",
@@ -499,16 +506,71 @@ impl MeshNode {
         }
 
         for child in &self.children {
-            for resource in child.request_handles(device, queue) {
-                resources.push(resource);
-            }
+            child.request_draw(view_bind_group, render_pass);
         }
-        resources
     }
 
     pub fn null() -> Self {
         Self {
             ..Default::default()
+        }
+    }
+}
+
+impl MeshServer {
+    pub fn new() -> Self {
+        Self { mesh_nodes: vec![] }
+    }
+
+    /// Add a constructed mesh node  
+    /// Returns the entry id of the mesh client  
+    /// Use `MeshServer::get` to get its reference  
+    /// Or `MeshServer::get_mut`, for a mutable one.
+    pub fn add_node(&mut self, node: MeshNode) -> usize {
+        for entry_candidate in 0..=self.mesh_nodes.len() {
+            if self
+                .mesh_nodes
+                .iter()
+                .map(|x| x.entry)
+                .find(|id| *id == entry_candidate)
+                .is_none()
+            {
+                let client = MeshClient {
+                    entry: entry_candidate,
+                    mesh: node,
+                };
+                self.mesh_nodes.push(client);
+                return entry_candidate
+            }
+        }
+        unreachable!()
+    }
+
+    pub fn get(&mut self, entry: usize) -> Option<&MeshClient> {
+        for child in &self.mesh_nodes {
+            if child.entry == entry {
+                return Some(child);
+            }
+        }
+        None
+    }
+
+    pub fn get_mut(&mut self, entry: usize) -> Option<&mut MeshClient> {
+        for child in &mut self.mesh_nodes {
+            if child.entry == entry {
+                return Some(child);
+            }
+        }
+        None
+    }
+
+    pub fn request_draw(
+        &self,
+        view_bind_group: &wgpu::BindGroup,
+        render_pass: &mut wgpu::RenderPass,
+    ) {
+        for node in self.mesh_nodes.iter() {
+            node.mesh.request_draw(view_bind_group, render_pass);
         }
     }
 }
@@ -530,28 +592,28 @@ impl Default for MeshNode {
     }
 }
 
-impl Spatial for MeshNode {
+impl Spatial for MeshClient {
     fn set_position(&mut self, position: glam::Vec3) {
-        self.position = position;
+        self.mesh.position = position;
     }
 
     fn set_rotation(&mut self, rotation: glam::Quat) {
-        self.rotation = rotation;
+        self.mesh.rotation = rotation;
     }
 
     fn set_scale(&mut self, scale: glam::Vec3) {
-        self.scale = scale;
+        self.mesh.scale = scale;
     }
 
     fn get_position(&self) -> glam::Vec3 {
-        self.position
+        self.mesh.position
     }
 
     fn get_rotation(&self) -> glam::Quat {
-        self.rotation
+        self.mesh.rotation
     }
 
     fn get_scale(&self) -> glam::Vec3 {
-        self.scale
+        self.mesh.scale
     }
 }

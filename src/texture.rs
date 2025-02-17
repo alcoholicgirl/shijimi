@@ -83,9 +83,40 @@ impl Texture {
 
     // RGBA8
     pub fn from_rgba8_bytes(data: &[u8], width: u32, height: u32) -> Self {
-        Self::Offline { width, height, data: data.to_vec(), modulation: [1.0; 4] }
+        Self::Offline {
+            width,
+            height,
+            data: data.to_vec(),
+            modulation: [1.0; 4],
+        }
     }
-    
+
+    pub fn create_render_attachment(device: &wgpu::Device, width: u32, height: u32) -> Self {
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Render Attachment"),
+            size,
+            dimension: wgpu::TextureDimension::D2,
+            sample_count: 1,
+            mip_level_count: 1,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+        Self::Online {
+            texture,
+            view,
+            sampler,
+            modulation: None,
+        }
+    }
+
     pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
     pub fn create_depth_buffer(device: &wgpu::Device, width: u32, height: u32) -> Self {
         let size = wgpu::Extent3d {
@@ -125,6 +156,13 @@ impl Texture {
         }
     }
 
+    pub fn view(&self) -> Option<&wgpu::TextureView> {
+        if let Texture::Online { view, .. } = self {
+            Some(view)
+        } else {
+            None
+        }
+    }
 }
 
 impl Drop for Texture {

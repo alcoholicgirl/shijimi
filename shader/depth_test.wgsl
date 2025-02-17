@@ -1,8 +1,15 @@
+// Shader module that generates depth attachment from given view projection matrix
+// This is used for shadow mapping
+
+// // Light Texture
+// @group(0) @binding(0)
+// var t_light: texture_2d<f32>;
+// @group(0) @binding(1)
+// var s_light: sampler;
 
 // View
 struct ViewUniform {
     @location(0) view_proj: mat4x4<f32>,
-    @location(1) view_pos: vec3f
 }
 @group(0) @binding(0)
 var<uniform> view: ViewUniform;
@@ -33,6 +40,6 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    return vec4f(0.0);
+fn fs_main(in: VertexOutput) -> @location(0) vec4f{
+    return vec4f(1.0);
 }

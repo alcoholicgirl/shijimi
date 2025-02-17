@@ -57,19 +57,26 @@ struct ModelUniform {
 var<uniform> model: ModelUniform;
 
 // Lights
-// struct PointLight {
-//     @location(0) position: vec3f,
-//     @location(1) intensity: f32,
-//     @location(2) cast_shadow: u32,
-//     @location(3) color: vec4f,
-// }
-// struct DirLight {
-//     @location(0) direction: vec3f,
-//     @location(1) intensity: f32,
-//     @location(2) cast_shadow: u32,
-//     @location(3) color: vec4f,
-//     @location(4) coord_proj: mat4x4<f32>,
-// }
+
+const ARRAY_SIZE: u32 = 16u;
+struct DirLight {
+    @location(0) position: vec3f,
+    @location(1) direction: vec3f,
+    @location(2) intensity: f32,
+    @location(3) shadow_map: i32,
+    // @location(4) texture_map: i32,
+    @location(4) coord_proj: mat4x4<f32>,
+    @location(5) color: vec4f,
+}
+@group(3) @binding(0)
+var<uniform> dirlights: array<DirLight, ARRAY_SIZE>;
+@group(3) @binding(1)
+var<uniform> dl_nums: u32; 
+@group(3) @binding(1)
+var t_dirlight: texture_depth_2d;
+@group(3) @binding(2)
+var s_dirlight: sampler;
+
 // struct SpotLight {
 //     @location(0) position: vec3f,
 //     @location(1) direction: vec3f,
@@ -85,12 +92,6 @@ var<uniform> model: ModelUniform;
 // @group(3) @binding(2)
 // var s_pointlight: sampler;
 
-// @group(4) @binding(0)
-// var<storage> dirlights: array<DirLight>;
-// @group(4) @binding(1)
-// var t_dirlight: texture_depth_2d_array;
-// @group(4) @binding(2)
-// var s_dirlight: sampler;
 
 // @group(5) @binding(0)
 // var<storage> spotlights: array<SpotLight>;
@@ -99,16 +100,6 @@ var<uniform> model: ModelUniform;
 // @group(5) @binding(2)
 // var s_spotlight: sampler;
 
-struct DirLight {
-    @location(0) position: vec3f,
-    @location(1) direction: vec3f,
-}
-@group(3) @binding(0)
-var<uniform> light: DirLight;
-@group(3) @binding(1)
-var t_sm: texture_depth_2d;
-@group(3) @binding(2)
-var s_sm: sampler;
 
 struct VertexInput {
     @location(0) position: vec3f,

@@ -1,34 +1,34 @@
 #[derive(Debug)]
-pub struct View {
+pub struct Camera {
     pub position: glam::Vec3,
     pub direction: glam::Vec3,
     pub fov: f32,
 }
 
-#[repr(C, align(16))]
+#[repr(C, align(8))]
 #[allow(unused)]
-pub struct ViewUniform {
+pub struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     view_pos: [f32; 3]
 }
 
-impl View {
+impl Camera {
     pub fn look_at(&mut self, target: glam::Vec3) {
         self.direction = target - self.position;
     }
-    pub fn uniform(&self, aspect_ratio: f32) -> ViewUniform {
+    pub fn uniform(&self, aspect_ratio: f32) -> CameraUniform {
         let view = glam::Mat4::look_to_lh(self.position, self.direction, glam::Vec3::Y);
         let proj = glam::Mat4::perspective_lh(self.fov, aspect_ratio, 0.1, 100.0);
         let view_proj = (proj * view).to_cols_array_2d();
         let view_pos = self.position.to_array();
-        ViewUniform {
+        CameraUniform {
             view_proj,
             view_pos
         }
     }
 }
 
-impl Default for View {
+impl Default for Camera {
     fn default() -> Self {
         Self {
             position: glam::vec3(0.0, 0.0, 1.0),

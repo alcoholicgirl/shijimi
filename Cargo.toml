@@ -12,5 +12,5 @@ gltf = "1.4.1"
 image = "0.25.5"
 iter_tools = "0.24.0"
 log = "0.4.25"
-wgpu = "24.0.1"
+wgpu = {version = "24.0.1", features = []}
 winit = "0.29"
