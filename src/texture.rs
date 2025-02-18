@@ -68,7 +68,7 @@ impl Texture {
             });
 
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Modulation buffer"),
+                label: Some("texture.modulation_buffer"),
                 contents: bytecast::cast_bytes(modulation),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
@@ -98,7 +98,7 @@ impl Texture {
             depth_or_array_layers: 1,
         };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Render Attachment"),
+            label: Some("texture.render_attachment"),
             size,
             dimension: wgpu::TextureDimension::D2,
             sample_count: 1,
@@ -125,7 +125,7 @@ impl Texture {
             depth_or_array_layers: 1,
         };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Depth Buffer"),
+            label: Some("texture.depth_buffer"),
             size,
             dimension: wgpu::TextureDimension::D2,
             sample_count: 1,
@@ -136,7 +136,45 @@ impl Texture {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Depth Buffer Sampler"),
+            label: Some("texture.depth_buffer_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            lod_min_clamp: 0.0,
+            lod_max_clamp: 200.0,
+            ..Default::default()
+        });
+        Self::Online {
+            texture,
+            view,
+            sampler,
+            modulation: None,
+        }
+    }
+
+    pub fn create_shadow_maps_2d_array(device: &wgpu::Device, size: u32, num_shadow_maps: u32) -> Self {
+        let size = wgpu::Extent3d {
+            width: size,
+            height: size * num_shadow_maps,
+            depth_or_array_layers: 1,
+        };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("texture.shadow_map"),
+            size,
+            dimension: wgpu::TextureDimension::D2,
+            sample_count: 1,
+            mip_level_count: 1,
+            format: Self::DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("texture.depth_buffer_sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,

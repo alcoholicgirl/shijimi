@@ -8,6 +8,7 @@ pub struct Material {
     pub metallic: Option<Texture>,
     pub roughness: Option<Texture>,
     pub ao: Option<Texture>,
+    pub emission: Option<Texture>,
     pub bind_group: Option<wgpu::BindGroup>,
 }
 
@@ -37,15 +38,19 @@ impl Material {
         if self.ao.is_none() {
             self.ao = Some(Texture::from_rgba8_bytes([0x00u8; 4].as_slice(), 1, 1));
         }
+        if self.emission.is_none() {
+            self.emission = Some(Texture::from_rgba8_bytes([0x00u8; 4].as_slice(), 1, 1));
+        }
 
         self.albedo.as_mut().unwrap().submit(device, queue);
         self.normal.as_mut().unwrap().submit(device, queue);
         self.metallic.as_mut().unwrap().submit(device, queue);
         self.roughness.as_mut().unwrap().submit(device, queue);
         self.ao.as_mut().unwrap().submit(device, queue);
+        self.emission.as_mut().unwrap().submit(device, queue);
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Albedo View"),
+            label: Some("material.bind_group"),
             layout: &texture_bind_group_layout,
             entries: &[
                 // Albedo
@@ -184,6 +189,34 @@ impl Material {
                 wgpu::BindGroupEntry {
                     binding: 14,
                     resource: match self.ao.as_ref().unwrap() {
+                        Texture::Online {
+                            modulation: Some((buffer, _)),
+                            ..
+                        } => buffer.as_entire_binding(),
+                        _ => unreachable!(),
+                    },
+                },
+
+                // Emissive
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: wgpu::BindingResource::TextureView(
+                        match &self.emission.as_ref().unwrap() {
+                            Texture::Online { view, .. } => view,
+                            Texture::Offline { .. } => unreachable!(),
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: wgpu::BindingResource::Sampler(match &self.ao.as_ref().unwrap() {
+                        Texture::Online { sampler, .. } => sampler,
+                        Texture::Offline { .. } => unreachable!(),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: match self.emission.as_ref().unwrap() {
                         Texture::Online {
                             modulation: Some((buffer, _)),
                             ..

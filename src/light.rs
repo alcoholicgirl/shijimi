@@ -1,6 +1,6 @@
 use wgpu::util::DeviceExt;
 
-use crate::{bytecast, mesh::MeshServer};
+use crate::{bytecast, texture::Texture};
 
 pub enum LightSource {
     Directional {
@@ -26,14 +26,12 @@ pub struct LightServer {
     // Directional Lights
     // Shadow Mapping Phase
     dl_sm_bind_group: wgpu::BindGroup,
-    dl_sm_buffer: wgpu::Buffer,
+    dl_sm_view_buffer: wgpu::Buffer,
 
     // Rasterization Phase
     dl_layout: wgpu::BindGroupLayout,
     dl_buffer: wgpu::Buffer,
-    dl_texture: wgpu::Texture,
-    dl_view: wgpu::TextureView,
-    dl_sampler: wgpu::Sampler,
+    dl_sm_texture: Texture,
 }
 
 impl LightServer {
@@ -44,98 +42,34 @@ impl LightServer {
         let lights = vec![];
         let dl_layout = device.create_bind_group_layout(&Self::DIR_LIGHT_LAYOUT);
         let dl_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Dir Light Buffer"),
+            label: Some("light.dirlight.buffer"),
             size: Self::ARRAY_SIZE as u64 * std::mem::size_of::<DirLightUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let dl_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Dir Light Shadow Map"),
-            size: wgpu::Extent3d {
-                width: Self::SHADOW_MAP_SIZE,
-                height: Self::SHADOW_MAP_SIZE,
-                depth_or_array_layers: Self::ARRAY_SIZE,
-            },
-            dimension: wgpu::TextureDimension::D2,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            format: wgpu::TextureFormat::Depth32Float,
-            sample_count: 1,
-            mip_level_count: 1,
-            view_formats: &[],
-        });
-        let dl_view = dl_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let dl_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            min_filter: wgpu::FilterMode::Linear,
-            mag_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let dl_sm_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Dir Light View Buffer"),
+        let dl_sm_view_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("light.dirlight.view_buffer"),
             contents: bytecast::cast_bytes(&[[0f32; 4]; 4]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         let dl_proj_bind_group_layout = device.create_bind_group_layout(&Self::VIEW_BIND_LAYOUT);
         let dl_sm_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Dir Light View Bind Group"),
+            label: Some("light.dirlight.shader_map_bind_group"),
             layout: &dl_proj_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: dl_sm_buffer.as_entire_binding(),
+                resource: dl_sm_view_buffer.as_entire_binding(),
             }],
         });
+        let dl_sm_texture = Texture::create_shadow_maps_2d_array(device, Self::SHADOW_MAP_SIZE, Self::ARRAY_SIZE);
         Self {
             lights,
-            dl_sm_buffer,
+            dl_sm_view_buffer,
             dl_sm_bind_group,
+            dl_sm_texture,
             dl_layout,
             dl_buffer,
-            dl_texture,
-            dl_view,
-            dl_sampler,
-        }
-    }
-
-    pub fn request_shadow_map(
-        &self,
-        mesh_server: &MeshServer,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        shadow_mapping_pipeline: &wgpu::RenderPipeline,
-    ) {
-        for light in self.lights.iter() {
-            if let LightSource::Directional { .. } = light.source {
-                let view = match light.source {
-                    LightSource::Directional { .. } => {
-                        self.dl_texture.create_view(&wgpu::TextureViewDescriptor {
-                            label: Some("Shadow Mapping View"),
-                            format: Some(wgpu::TextureFormat::Depth32Float),
-                            dimension: Some(wgpu::TextureViewDimension::D2Array),
-                            array_layer_count: Some(Self::ARRAY_SIZE),
-                            ..Default::default()
-                        })
-                    }
-                };
-                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Shadow Mapping Pass"),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    ..Default::default()
-                });
-                render_pass.set_pipeline(shadow_mapping_pipeline);
-                render_pass.set_bind_group(0, &self.dl_sm_bind_group, &[]);
-                let view_proj = light.source.view_proj().to_cols_array_2d();
-                let uniform = bytecast::cast_bytes(&view_proj);
-                queue.write_buffer(&self.dl_sm_buffer, 0, uniform);
-                mesh_server.request_draw(&self.dl_sm_bind_group, &mut render_pass);
-            }
         }
     }
 
@@ -168,10 +102,7 @@ impl LightServer {
             .collect::<Vec<_>>();
         for entry in 0..Self::ARRAY_SIZE as usize {
             if !used_entries.contains(&entry) {
-                let client = LightClient {
-                    source,
-                    entry
-                };
+                let client = LightClient { source, entry };
                 self.lights.push(client);
                 return Some(entry);
             }
@@ -181,7 +112,7 @@ impl LightServer {
 
     // Bind group layout in the main shader
     const DIR_LIGHT_LAYOUT: wgpu::BindGroupLayoutDescriptor<'_> = wgpu::BindGroupLayoutDescriptor {
-        label: Some("Dir Light Bind Group Layout"),
+        label: Some("light.dirlight.bind_group_layout"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -223,7 +154,7 @@ impl LightServer {
     };
 
     const VIEW_BIND_LAYOUT: wgpu::BindGroupLayoutDescriptor<'_> = wgpu::BindGroupLayoutDescriptor {
-        label: Some("Shadow Mapping View Bind Group Layout"),
+        label: Some("light.view_proj_bind_group_layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,

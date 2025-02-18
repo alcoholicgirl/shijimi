@@ -120,7 +120,7 @@ fn build(
                     });
                 }
             }
-
+            
             // Metallic
             if let Some(tex) = primitive
                 .material()
@@ -181,6 +181,19 @@ fn build(
                         data: rgba8_loader(texture),
                         modulation: [1.0; 4],
                     });
+                }
+            }
+
+            if let Some(tex) = primitive.material().emissive_texture() {
+                let texture = &images.get(tex.texture().index());
+                let modulation = primitive.material().emissive_factor();
+                if let Some(texture) = texture {
+                    material.emission = Some(Texture::Offline {
+                        width: texture.width,
+                        height: texture.height,
+                        data: rgba8_loader(texture),
+                        modulation: [modulation[0], modulation[1], modulation[2], 1.0],
+                    })
                 }
             }
 
@@ -360,13 +373,13 @@ impl Mesh {
             return Err(anyhow::anyhow!("Mesh buffers already submitted"));
         }
         let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
+            label: Some("mesh.vertex_buffer"),
             contents: bytecast::cast_bytes_vec(&self.vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
         let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
+            label: Some("mesh.index_buffer"),
             contents: bytecast::cast_bytes_vec(&self.indices),
             usage: wgpu::BufferUsages::INDEX,
         });
@@ -405,14 +418,14 @@ impl MeshNode {
         let model = self.model_matrix().to_cols_array_2d();
         self.uniform_buffer = Some(
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Model Uniform Buffer"),
+                label: Some("mesh.model_uniform_buffer"),
                 contents: bytecast::cast_bytes(&model),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }),
         );
 
         self.model_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Model Uniform Bind Group"),
+            label: Some("mesh.model_bind_group"),
             layout: &model_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -540,7 +553,7 @@ impl MeshServer {
                     mesh: node,
                 };
                 self.mesh_nodes.push(client);
-                return entry_candidate
+                return entry_candidate;
             }
         }
         unreachable!()

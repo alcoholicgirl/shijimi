@@ -1,13 +1,4 @@
-use std::num::NonZero;
-
-use wgpu::include_wgsl;
-
-use crate::{
-    light::LightServer,
-    mesh::MeshServer,
-    texture::Texture,
-    vertex::{CanvasVertex, Vertex},
-};
+use crate::{light::LightServer, mesh::MeshServer, texture::Texture, vertex::Vertex};
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -25,9 +16,9 @@ pub struct State<'a> {
     render_pipeline: wgpu::RenderPipeline,
 
     screen_texture: Texture,
-    post_process_bind_group_layout: wgpu::BindGroupLayout,
-    post_process_sampler: wgpu::Sampler,
-    post_process_pipeline: wgpu::RenderPipeline,
+    post_processing_bind_group_layout: wgpu::BindGroupLayout,
+    post_processing_sampler: wgpu::Sampler,
+    post_processing_pipeline: wgpu::RenderPipeline,
 
     pub size: winit::dpi::PhysicalSize<u32>,
     pub window: &'a winit::window::Window,
@@ -69,7 +60,7 @@ impl<'a> State<'a> {
             .unwrap();
 
         // Main Render Pipeline
-        let shader = device.create_shader_module(wgpu::include_wgsl!("../shader/shader.wgsl"));
+        let shader = device.create_shader_module(wgpu::include_wgsl!("../shader/pbr_main.wgsl"));
         let texture_bind_group_layout =
             device.create_bind_group_layout(&Self::TEXTURE_BIND_GROUP_LAYOUT_DESC);
         let view_bind_group_layout =
@@ -79,7 +70,7 @@ impl<'a> State<'a> {
 
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
+                label: Some("state.render_pipeline_layout"),
                 bind_group_layouts: &[
                     &texture_bind_group_layout,
                     &view_bind_group_layout,
@@ -89,7 +80,7 @@ impl<'a> State<'a> {
             });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
+            label: Some("state.render_pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -131,16 +122,16 @@ impl<'a> State<'a> {
 
         // Shadow Mapping Pipeline
         let sm_shader =
-            device.create_shader_module(wgpu::include_wgsl!("../shader/depth_test.wgsl"));
+            device.create_shader_module(wgpu::include_wgsl!("../shader/shadow_mapping.wgsl"));
         let sm_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Shadow Mapping Pipeline Layout"),
+            label: Some("state.shadow_map_pipeline_layout"),
             bind_group_layouts: &[&view_bind_group_layout, &model_bind_group_layout],
             push_constant_ranges: &[],
         });
 
         let shadow_mapping_pipeline =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Shadow Mapping Pipeline"),
+                label: Some("state.shadow_map_pipeline"),
                 layout: Some(&sm_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &sm_shader,
@@ -177,32 +168,40 @@ impl<'a> State<'a> {
 
         // Post Process
         let screen_buffer = Texture::create_render_attachment(&device, config.width, config.height);
-        let screen_view = screen_buffer.view();
-        let post_process_bind_group_layout =
+        let post_processing_bind_group_layout =
             device.create_bind_group_layout(&Self::POST_PROCESS_BIND_GROUP_LAYOUT_DESC);
 
-        let post_process_shader =
-            device.create_shader_module(include_wgsl!("../shader/post_process.wgsl"));
-        let post_process_pipeline_layout =
+        let post_processing_shader =
+            device.create_shader_module(wgpu::include_wgsl!("../shader/post_process.wgsl"));
+        let post_processing_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Post Process Pipeline Layout"),
-                bind_group_layouts: &[&post_process_bind_group_layout],
+                label: Some("state.post_processing_pipeline_layout"),
+                bind_group_layouts: &[&post_processing_bind_group_layout],
                 push_constant_ranges: &[],
             });
-        let post_process_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        let post_processing_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             ..Default::default()
         });
-
-        let post_process_pipeline =
+        let post_processing_pipeline =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Post Process Pipeline"),
-                layout: Some(&post_process_pipeline_layout),
+                label: Some("state.post_procesing_pipeline"),
+                layout: Some(&post_processing_pipeline_layout),
                 vertex: wgpu::VertexState {
-                    module: &post_process_shader,
+                    module: &post_processing_shader,
                     entry_point: Some("vs_main"),
                     compilation_options: Default::default(),
-                    buffers: &[CanvasVertex::desc()],
+                    buffers: &[],
                 },
+                fragment: Some(wgpu::FragmentState {
+                    module: &post_processing_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     strip_index_format: None,
@@ -214,16 +213,6 @@ impl<'a> State<'a> {
                 },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &post_process_shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: config.format,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
                 multiview: None,
                 cache: None,
             });
@@ -240,9 +229,9 @@ impl<'a> State<'a> {
             shadow_mapping_pipeline,
             render_pipeline,
             screen_texture: screen_buffer,
-            post_process_bind_group_layout,
-            post_process_sampler,
-            post_process_pipeline,
+            post_processing_bind_group_layout,
+            post_processing_sampler,
+            post_processing_pipeline,
             size,
             window,
         })
@@ -260,7 +249,8 @@ impl<'a> State<'a> {
             let old_buffer = std::mem::replace(&mut self.depth_buffer, depth_buffer);
             drop(old_buffer); // just in case
 
-            let screen_texture = Texture::create_render_attachment(&self.device, size.width, size.height);
+            let screen_texture =
+                Texture::create_render_attachment(&self.device, size.width, size.height);
             let old_screen_texture = std::mem::replace(&mut self.screen_texture, screen_texture);
             drop(old_screen_texture);
         }
@@ -282,7 +272,7 @@ impl<'a> State<'a> {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
+                label: Some("state.render_encoder"),
             });
         // Shadow mapping
         // {
@@ -297,7 +287,7 @@ impl<'a> State<'a> {
         // Render pass
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
+                label: Some("state.render_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.screen_texture.view().unwrap(),
                     resolve_target: None,
@@ -330,7 +320,7 @@ impl<'a> State<'a> {
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Post Processing"),
+                label: Some("state.post_processing_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &surface_view,
                     resolve_target: None,
@@ -343,28 +333,27 @@ impl<'a> State<'a> {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            let post_process_bind_group =
+            let post_processing_bind_group =
                 self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Post Process Bind Group"),
-                    layout: &self.post_process_bind_group_layout,
+                    label: Some("state.post_processing_bind_group"),
+                    layout: &self.post_processing_bind_group_layout,
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&self.screen_texture.view().unwrap()),
+                            resource: wgpu::BindingResource::TextureView(
+                                &self.screen_texture.view().unwrap(),
+                            ),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.post_process_sampler),
+                            resource: wgpu::BindingResource::Sampler(&self.post_processing_sampler),
                         },
                     ],
                 });
 
-            let (v, i) = CanvasVertex::request_quad_buffer(&self.device);
-            render_pass.set_pipeline(&self.post_process_pipeline);
-            render_pass.set_bind_group(0, Some(&post_process_bind_group), &[]);
-            render_pass.set_vertex_buffer(0, v.slice(..));
-            render_pass.set_index_buffer(i.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..6, 0, 0..1);
+            render_pass.set_pipeline(&self.post_processing_pipeline);
+            render_pass.set_bind_group(0, Some(&post_processing_bind_group), &[]);
+            render_pass.draw(0..6, 0..1);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         surface_output.present();
@@ -397,7 +386,7 @@ impl<'a> State<'a> {
     // Bind Group Layouts
     pub const TEXTURE_BIND_GROUP_LAYOUT_DESC: wgpu::BindGroupLayoutDescriptor<'a> =
         wgpu::BindGroupLayoutDescriptor {
-            label: Some("Texture Bind Group Layout"),
+            label: Some("state.texture_bind_group_layout"),
             entries: &[
                 // Albedo
                 wgpu::BindGroupLayoutEntry {
@@ -533,12 +522,38 @@ impl<'a> State<'a> {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 16,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 17,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         };
 
     pub const VIEW_BIND_GROUP_LAYOUT_DESC: wgpu::BindGroupLayoutDescriptor<'a> =
         wgpu::BindGroupLayoutDescriptor {
-            label: Some("View Bind Group Layout"),
+            label: Some("state.view_bind_group_layout_desc"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -553,7 +568,7 @@ impl<'a> State<'a> {
 
     pub const MODEL_BIND_GROUP_LAYOUT_DESC: wgpu::BindGroupLayoutDescriptor<'a> =
         wgpu::BindGroupLayoutDescriptor {
-            label: Some("Model Bind Group Layout"),
+            label: Some("state.model_bind_group_layout_desc"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,
@@ -568,7 +583,7 @@ impl<'a> State<'a> {
 
     pub const POST_PROCESS_BIND_GROUP_LAYOUT_DESC: wgpu::BindGroupLayoutDescriptor<'a> =
         wgpu::BindGroupLayoutDescriptor {
-            label: Some("Post Process Bind Group Layout"),
+            label: Some("state.post_processing_bind_group_layout_desc"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,

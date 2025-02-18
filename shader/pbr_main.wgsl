@@ -1,6 +1,7 @@
 // Fundamental Cook-Torrance PBR Shader
 
 // PBR Textures
+const PI = 3.141592653589793;
 // Albedo
 @group(0) @binding(0)
 var t_albedo: texture_2d<f32>;
@@ -40,6 +41,14 @@ var t_ao: texture_2d<f32>;
 var s_ao: sampler;
 @group(0) @binding(14)
 var<uniform> m_ao: vec4f;
+
+// Emissive
+@group(0) @binding(15)
+var t_emissive: texture_2d<f32>;
+@group(0) @binding(16)
+var s_emissive: sampler;
+@group(0) @binding(17)
+var<uniform> m_emissive: vec4f;
 
 // View
 struct ViewUniform {
@@ -134,12 +143,66 @@ fn vs_main(
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // Normal Mapping
-    var normal = normalize(in.normal);
-    var tangent = normalize(in.tangent.xyz);
-    var bitangent = normalize(cross(normal, tangent)) * in.tangent.w;
-    var pbr_normal = textureSample(t_normal, s_normal, in.texcoord).xyz - vec3(0.5);
-    var tbn = mat3x3(tangent, bitangent, normal);
-    normal = normalize(tbn * pbr_normal);
+    let normal = normalize(in.normal);
+    let tangent = normalize(in.tangent.xyz);
+    let bitangent = normalize(cross(normal, tangent)) * in.tangent.w;
+    let pbr_normal = textureSample(t_normal, s_normal, in.texcoord).xyz - vec3(0.5);
+    let tbn = mat3x3(tangent, bitangent, normal);
 
-    return textureSample(t_albedo, s_albedo, in.texcoord);
+    let N = normalize(tbn * pbr_normal);
+    let V = normalize(view.position - in.position);
+    let albedo = textureSample(t_albedo, s_albedo, in.texcoord);
+    let metallic = textureSample(t_metallic, s_metallic, in.texcoord).r;
+    let roughness = textureSample(t_roughness, s_roughness, in.texcoord).r;
+    let ao = textureSample(t_ao, s_ao, in.texcoord);
+    let F0 = mix(vec3f(0.2), albedo.rgb, metallic);
+    var l_out = vec3f(0.0);
+    // Directional Light
+    for (var it = 0u; it < dl_nums; it++) {
+        // Cook-Torrance specular BRDF
+        let dW = 1.0 / f32(dl_nums);
+        let L = normalize(dirlights[it].position - in.position);
+        let H = normalize(V + L);
+
+        let D = normal_distribution(N, H, roughness);
+        let G = geometry_smith(N, V, L, roughness);
+        let F = fresnel_schlick(H, V, F0);
+        let Ks = F;
+        let Kd = (vec3f(1.0) - Ks) * (1.0 - metallic);
+
+        let specular = D * F * G / (4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001);
+        let radiance = dirlights[it].intensity * dirlights[it].color.rgb * dirlights[it].color.a;
+        l_out += (Kd * albedo.rgb / PI + specular) * radiance * max(dot(N, L), 0.0);
+    }
+    let ambient = vec3f(0.02) * albedo.rgb * ao.rgb;
+    var color = ambient + l_out;
+    
+    return vec4f(reinhard_tonemapping(color.xyz), 1.0);
+}
+
+// Trowbridge-Reitz GGX
+fn normal_distribution(n: vec3f, h: vec3f, roughness: f32) -> f32 {
+    let roughness_squared = pow(roughness, 2.0);
+    let dot_nh = max(dot(n, h), 0.0);
+    return roughness_squared / (PI * pow(pow(dot_nh, 2.0) * (roughness_squared - 1.0) + 1.0, 2.0));
+}
+
+// Smith's Schlick-GGX
+fn geometry_smith(n: vec3f, v: vec3f, l: vec3f, roughness: f32) -> f32 {
+    let r = roughness + 1.0;
+    let k = r * r / 8.0;
+    let n_v = max(dot(n, v), 0.0);
+    let n_l = max(dot(n, l), 0.0);
+    let ggx1 = n_v / (n_v * (1.0 - k) + k);
+    let ggx2 = n_l / (n_l * (1.0 - k) + k);
+    return ggx1 * ggx2;
+}
+
+// Fresnel-Schlick Approximation
+fn fresnel_schlick(h: vec3f, v: vec3f, f: vec3f) -> vec3f {
+    return f + vec3f(1.0 - f) * pow(1.0 - dot(h, v), 5.0);
+}
+
+fn reinhard_tonemapping(color: vec3f) -> vec3f {
+    return pow(color / vec3(color + vec3f(1.0)), vec3(1.0 / 2.2));
 }

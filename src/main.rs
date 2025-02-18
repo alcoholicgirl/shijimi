@@ -36,18 +36,18 @@ fn main() -> anyhow::Result<()> {
         },
     );
 
-    let mut node = mesh::MeshNode::load_from_path("assets/model/mushroom/scene.gltf")?;
+    let mut node = mesh::MeshNode::load_from_path("assets/model/hiroi/scene.gltf")?;
     let mut camera = camera::Camera::default();
     let aspect_ratio = state.size.width as f32 / state.size.height as f32;
     let camera_buffer = state
         .device
         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
+            label: Some("main.camera.buffer"),
             contents: cast_bytes(&camera.uniform(aspect_ratio)),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         });
     let view_bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Camera Bind Group"),
+        label: Some("main.camera.bind_group"),
         layout: &state.view_bind_group_layout,
         entries: &[wgpu::BindGroupEntry {
             binding: 0,
@@ -86,12 +86,6 @@ fn main() -> anyhow::Result<()> {
                             let aspect_ratio = state.size.width as f32 / state.size.height as f32;
                             frame += 1;
                             let ftime = frame as f32 * 0.004;
-                            node.set_scale(glam::Vec3 {
-                                x: 1.0,
-                                y: 1.0 + (2.0 * ftime).sin() * 0.4,
-                                z: 1.0,
-                            });
-
                             camera.position =
                                 glam::Mat3::from_rotation_y(ftime * 0.2) * glam::Vec3::Z * 2.0;
                             camera.look_at(glam::Vec3::ZERO);
@@ -106,7 +100,7 @@ fn main() -> anyhow::Result<()> {
                                 &state.queue,
                                 glam::Mat4::from_translation(glam::Vec3 {
                                     x: 0.0,
-                                    y: -0.4,
+                                    y: -0.8,
                                     z: 0.0,
                                 }) * glam::Mat4::from_scale(glam::Vec3::ONE * 0.5),
                             );
