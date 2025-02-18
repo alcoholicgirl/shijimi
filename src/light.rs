@@ -1,7 +1,6 @@
 use wgpu::util::DeviceExt;
 
 use crate::{bytecast, texture::Texture};
-
 pub enum LightSource {
     Directional {
         position: glam::Vec3,
@@ -29,8 +28,9 @@ pub struct LightServer {
     dl_sm_view_buffer: wgpu::Buffer,
 
     // Rasterization Phase
-    dl_layout: wgpu::BindGroupLayout,
     dl_buffer: wgpu::Buffer,
+    dl_layout: wgpu::BindGroupLayout,
+    pub dl_bind_group: wgpu::BindGroup,
     dl_sm_texture: Texture,
 }
 
@@ -43,10 +43,11 @@ impl LightServer {
         let dl_layout = device.create_bind_group_layout(&Self::DIR_LIGHT_LAYOUT);
         let dl_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("light.dirlight.buffer"),
-            size: Self::ARRAY_SIZE as u64 * std::mem::size_of::<DirLightUniform>() as u64,
+            size: 16 + Self::ARRAY_SIZE as u64 * std::mem::size_of::<DirLightUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
         let dl_sm_view_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("light.dirlight.view_buffer"),
             contents: bytecast::cast_bytes(&[[0f32; 4]; 4]),
@@ -62,7 +63,16 @@ impl LightServer {
                 resource: dl_sm_view_buffer.as_entire_binding(),
             }],
         });
-        let dl_sm_texture = Texture::create_shadow_maps_2d_array(device, Self::SHADOW_MAP_SIZE, Self::ARRAY_SIZE);
+        let dl_sm_texture =
+            Texture::create_shadow_maps_2d_array(device, Self::SHADOW_MAP_SIZE, Self::ARRAY_SIZE);
+        let dl_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("light.dirlight.bind_group_layout"),
+            layout: &dl_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: dl_buffer.as_entire_binding(),
+            }],
+        });
         Self {
             lights,
             dl_sm_view_buffer,
@@ -70,25 +80,36 @@ impl LightServer {
             dl_sm_texture,
             dl_layout,
             dl_buffer,
+            dl_bind_group,
         }
     }
 
     pub fn update_uniform(&self, queue: &wgpu::Queue) {
-        let mut d_entry = 0usize;
+        let mut d_entry = 0u32;
         for light in &self.lights {
             match &light.source {
                 LightSource::Directional { .. } => {
-                    let uniform = DirLightUniform::from(&light.source, d_entry);
+                    let uniform = DirLightUniform::from(&light.source, d_entry as usize);
                     let data = bytecast::cast_bytes(&uniform);
-                    queue.write_buffer(
-                        &self.dl_buffer,
-                        (d_entry * std::mem::size_of::<DirLightUniform>()) as u64,
-                        data,
-                    );
+                    let mut d_uniform_view = queue
+                        .write_buffer_with(
+                            &self.dl_buffer,
+                            16_u64 + d_entry as u64 * std::mem::size_of::<DirLightUniform>() as u64,
+                            std::num::NonZero::new(std::mem::size_of::<DirLightUniform>() as u64)
+                                .unwrap(),
+                        )
+                        .unwrap();
+                    d_uniform_view.copy_from_slice(data);
                     d_entry += 1;
                 }
             }
         }
+        let mut d_entry_view = queue.write_buffer_with(
+            &self.dl_buffer,
+            0,
+            std::num::NonZero::new(std::mem::size_of::<i32>() as u64).unwrap(),
+        ).unwrap();
+        d_entry_view.copy_from_slice(bytecast::cast_bytes(&(d_entry)));
     }
 
     /// Try to spawn a light from given light source
@@ -111,10 +132,10 @@ impl LightServer {
     }
 
     // Bind group layout in the main shader
-    const DIR_LIGHT_LAYOUT: wgpu::BindGroupLayoutDescriptor<'_> = wgpu::BindGroupLayoutDescriptor {
-        label: Some("light.dirlight.bind_group_layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
+    pub const DIR_LIGHT_LAYOUT: wgpu::BindGroupLayoutDescriptor<'_> =
+        wgpu::BindGroupLayoutDescriptor {
+            label: Some("light.dirlight.bind_group_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
@@ -122,36 +143,9 @@ impl LightServer {
                     has_dynamic_offset: false,
                     min_binding_size: None,
                 },
-                count: Some(std::num::NonZero::new(LightServer::ARRAY_SIZE).unwrap()),
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
                 count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2Array,
-                    multisampled: false,
-                },
-                count: Some(std::num::NonZero::new(LightServer::ARRAY_SIZE).unwrap()),
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                count: None,
-            },
-        ],
-    };
+            }],
+        };
 
     const VIEW_BIND_LAYOUT: wgpu::BindGroupLayoutDescriptor<'_> = wgpu::BindGroupLayoutDescriptor {
         label: Some("light.view_proj_bind_group_layout"),
@@ -192,11 +186,11 @@ impl LightSource {
     }
 }
 
-#[repr(C, align(8))]
+#[repr(C)]
 pub struct DirLightUniform {
     position: [f32; 3],
-    direction: [f32; 3],
     intensity: f32,
+    direction: [f32; 3],
     shadow_map: i32,
     coord_proj: [[f32; 4]; 4],
     color: [f32; 4],

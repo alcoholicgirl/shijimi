@@ -5,11 +5,10 @@ pub struct Camera {
     pub fov: f32,
 }
 
-#[repr(C, align(8))]
-#[allow(unused)]
+#[repr(C)]
 pub struct CameraUniform {
     view_proj: [[f32; 4]; 4],
-    view_pos: [f32; 3]
+    view_pos: [f32; 4],
 }
 
 impl Camera {
@@ -20,7 +19,7 @@ impl Camera {
         let view = glam::Mat4::look_to_lh(self.position, self.direction, glam::Vec3::Y);
         let proj = glam::Mat4::perspective_lh(self.fov, aspect_ratio, 0.1, 100.0);
         let view_proj = (proj * view).to_cols_array_2d();
-        let view_pos = self.position.to_array();
+        let view_pos = glam::Vec4::from((self.position, 1.0)).to_array();
         CameraUniform {
             view_proj,
             view_pos

@@ -84,7 +84,14 @@ fn build(
                         .flatten()
                         .collect::<Vec<_>>()
                 }
-                _ => panic!("Unsupported format"),
+                gltf::image::Format::R8 => image
+                    .pixels
+                    .clone()
+                    .into_iter()
+                    .map(|r| [r, r, r, 0xff].into_iter())
+                    .flatten()
+                    .collect::<Vec<_>>(),
+                _ => panic!("Unsupported format: {:?}", image.format),
             };
 
             // Albedo
@@ -120,7 +127,7 @@ fn build(
                     });
                 }
             }
-            
+
             // Metallic
             if let Some(tex) = primitive
                 .material()
@@ -288,13 +295,17 @@ fn build(
                     .iter()
                     .map(|x| texcoords[*x as usize])
                     .collect::<Vec<_>>();
-
-                let pos_uv = izip!(
+                let normals_flattened = indices
+                    .iter()
+                    .map(|x| normals[*x as usize])
+                    .collect::<Vec<_>>();
+                let pos_uv_normal = izip!(
                     positions_flattened.chunks_exact(3),
                     texcoords_flattened.chunks_exact(3),
+                    normals_flattened.chunks_exact(3)
                 );
-                let tangents = pos_uv
-                    .map(|(position, texcoord)| {
+                let tangents = pos_uv_normal
+                    .map(|(position, texcoord, normal)| {
                         let (p1, p2, p3) = (
                             glam::Vec3::from(position[0]),
                             glam::Vec3::from(position[1]),
@@ -305,35 +316,41 @@ fn build(
                             glam::Vec2::from(texcoord[1]),
                             glam::Vec2::from(texcoord[2]),
                         );
-                        let duv1 = t1 - t2;
-                        let duv2 = t3 - t2;
                         let e1 = p1 - p2;
                         let e2 = p3 - p2;
-                        let v1 = glam::vec2(duv2.y, -duv1.y);
-                        let v2 = glam::vec2(-duv2.x, duv1.x);
-                        let tangent = [
-                            v1.x * e1.x - v2.y * e2.x,
-                            v1.x * e1.y - v2.y * e2.y,
-                            v1.x * e1.z - v2.y * e2.z,
-                            // 1.0,
-                        ];
+                        let duv1 = t1 - t2;
+                        let duv2 = t3 - t2;
+                        let f = 1.0f32 / (duv1.x * duv2.y - duv2.x * duv1.y);
+                        let tangent = f * glam::vec3(
+                            duv2.y * e1.x - duv1.y * e2.x,
+                            duv2.y * e1.y - duv1.y * e2.y,
+                            duv2.y * e1.z - duv1.y * e2.z,
+                        )
+                        .normalize();
+                        let bitangent = f * glam::vec3(
+                            -duv2.x * e1.x + duv1.x * e2.x,
+                            -duv2.x * e1.y + duv1.x * e2.y,
+                            -duv2.x * e1.z + duv1.x * e2.z,
+                        )
+                        .normalize();
+                        let normal = glam::Vec3::from(normal[1]);
+                        let w = if tangent.cross(normal).dot(bitangent) > 0.0 {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+                        let tangent = glam::Vec4::from((tangent, w));
                         [tangent, tangent, tangent].into_iter()
                     })
                     .flatten()
                     .collect::<Vec<_>>();
-                let mut tangents_processed: Vec<glam::Vec3> =
+                let mut tangents_processed: Vec<glam::Vec4> =
                     (0..positions.len()).map(|_| Default::default()).collect();
 
                 for (index, tangent) in indices.iter().zip(tangents) {
-                    tangents_processed[*index as usize] += glam::Vec3::from(tangent);
+                    tangents_processed[*index as usize] = tangent;
                 }
-                let tangents = tangents_processed
-                    .iter()
-                    .map(|t| {
-                        let t = t.normalize();
-                        glam::vec4(t.x, t.y, t.z, 1.0).to_array()
-                    })
-                    .collect();
+                let tangents = tangents_processed.iter().map(|t| t.to_array()).collect();
                 tangents
             };
 
@@ -481,7 +498,9 @@ impl MeshNode {
         let uniform_data = t_model.to_cols_array_2d();
         let uniform = bytecast::cast_bytes(&uniform_data);
         if let Some(buffer) = &self.uniform_buffer {
-            queue.write_buffer(buffer, 0, uniform);
+            let mut buffer_view =
+                queue.write_buffer_with(buffer, 0, std::num::NonZero::new(64).unwrap()).unwrap();
+            buffer_view.copy_from_slice(uniform);
         }
 
         for child in &self.children {
@@ -527,6 +546,10 @@ impl MeshNode {
         Self {
             ..Default::default()
         }
+    }
+
+    pub fn material(&mut self) -> &mut Material {
+        &mut self.material
     }
 }
 

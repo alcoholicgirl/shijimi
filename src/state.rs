@@ -68,6 +68,9 @@ impl<'a> State<'a> {
         let model_bind_group_layout =
             device.create_bind_group_layout(&Self::MODEL_BIND_GROUP_LAYOUT_DESC);
 
+        let light_bind_group_layout =
+            device.create_bind_group_layout(&LightServer::DIR_LIGHT_LAYOUT);
+
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("state.render_pipeline_layout"),
@@ -75,6 +78,7 @@ impl<'a> State<'a> {
                     &texture_bind_group_layout,
                     &view_bind_group_layout,
                     &model_bind_group_layout,
+                    &light_bind_group_layout,
                 ],
                 push_constant_ranges: &[],
             });
@@ -274,16 +278,11 @@ impl<'a> State<'a> {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("state.render_encoder"),
             });
-        // Shadow mapping
-        // {
-        //     light_server.update_uniform(&self.queue);
-        //     light_server.request_shadow_map(
-        //         mesh_server,
-        //         &self.queue,
-        //         &mut encoder,
-        //         &self.shadow_mapping_pipeline,
-        //     );
-        // }
+        
+        // Lighting and Shadow Mapping
+        {
+            light_server.update_uniform(&self.queue);
+        }
         // Render pass
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -315,6 +314,7 @@ impl<'a> State<'a> {
                 ..Default::default()
             });
             render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_bind_group(3, &light_server.dl_bind_group, &[]);
             mesh_server.request_draw(view, &mut render_pass);
         }
 

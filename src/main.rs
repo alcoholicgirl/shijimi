@@ -1,9 +1,11 @@
+use camera::CameraUniform;
 use light::LightServer;
 use mesh::MeshServer;
 use spatial::Spatial;
 use wgpu::util::DeviceExt;
 
 mod bytecast;
+mod camera;
 mod light;
 mod material;
 mod mesh;
@@ -11,7 +13,6 @@ mod spatial;
 mod state;
 mod texture;
 mod vertex;
-mod camera;
 use bytecast::*;
 
 fn main() -> anyhow::Result<()> {
@@ -24,19 +25,27 @@ fn main() -> anyhow::Result<()> {
     // Scene building
     let mut mesh_server = MeshServer::new();
     let mut light_server = LightServer::new(&state.device);
-    let dlight = light_server.request_light(
-        light::LightSource::Directional {
-            position: glam::vec3(0.0, 1.0, 0.0),
-            rotation: glam::Quat::from_rotation_y(15f32.to_radians()),
-            intensity: 1.0f32,
-            cast_shadow: true,
-            color: [1.0; 4],
-            ortho_window: (10.0, 10.0),
-            depth: 10.0f32,
-        },
-    );
-
-    let mut node = mesh::MeshNode::load_from_path("assets/model/hiroi/scene.gltf")?;
+    let l1 = light_server.request_light(light::LightSource::Directional {
+        position: glam::vec3(0.0, 4.0, 0.0),
+        rotation: glam::Quat::from_rotation_y(15f32)
+            * glam::Quat::from_rotation_x(-45f32.to_radians()),
+        intensity: 30.0f32,
+        cast_shadow: true,
+        color: [0.4, 0.4, 1.0, 1.0],
+        ortho_window: (10.0, 10.0),
+        depth: 10.0f32,
+    });
+    let l2 = light_server.request_light(light::LightSource::Directional {
+        position: glam::vec3(0.0, 4.0, 0.0),
+        rotation: glam::Quat::from_rotation_y(-15f32)
+            * glam::Quat::from_rotation_x(-45f32.to_radians()),
+        intensity: 30.0f32,
+        cast_shadow: true,
+        color: [1.0, 0.4, 0.4, 1.0],
+        ortho_window: (10.0, 10.0),
+        depth: 10.0f32,
+    });
+    let mut node = mesh::MeshNode::load_from_path("assets/model/mushroom/scene.gltf")?;
     let mut camera = camera::Camera::default();
     let aspect_ratio = state.size.width as f32 / state.size.height as f32;
     let camera_buffer = state
@@ -61,7 +70,7 @@ fn main() -> anyhow::Result<()> {
         &state.model_bind_group_layout,
     );
 
-    let mushroom_node = mesh_server.add_node(node);
+    let node_entry = mesh_server.add_node(node);
     let mut frame = 0;
 
     event_loop.run(move |ev, control_flow| match ev {
@@ -82,28 +91,35 @@ fn main() -> anyhow::Result<()> {
                             return;
                         }
                         {
-                            let node = mesh_server.get_mut(mushroom_node).unwrap();
                             let aspect_ratio = state.size.width as f32 / state.size.height as f32;
                             frame += 1;
                             let ftime = frame as f32 * 0.004;
-                            camera.position =
-                                glam::Mat3::from_rotation_y(ftime * 0.2) * glam::Vec3::Z * 2.0;
-                            camera.look_at(glam::Vec3::ZERO);
-                            let camera_uniform = camera.uniform(aspect_ratio);
-                            state.queue.write_buffer(
-                                &camera_buffer,
-                                0,
-                                bytecast::cast_bytes(&camera_uniform),
-                            );
-
-                            node.mesh.apply_model(
-                                &state.queue,
-                                glam::Mat4::from_translation(glam::Vec3 {
-                                    x: 0.0,
-                                    y: -0.8,
-                                    z: 0.0,
-                                }) * glam::Mat4::from_scale(glam::Vec3::ONE * 0.5),
-                            );
+                            {
+                                camera.position =
+                                    glam::Mat3::from_rotation_y(ftime * 0.2) * glam::Vec3::Z * 2.0;
+                                camera.look_at(glam::Vec3::ZERO);
+                                let camera_uniform = camera.uniform(aspect_ratio);
+                                let mut queue_view = state
+                                    .queue
+                                    .write_buffer_with(
+                                        &camera_buffer,
+                                        0,
+                                        std::num::NonZero::new(
+                                            std::mem::size_of::<CameraUniform>() as u64,
+                                        )
+                                        .unwrap(),
+                                    )
+                                    .unwrap();
+                                queue_view.copy_from_slice(bytecast::cast_bytes(&camera_uniform));
+                            }
+                            {
+                                let node = mesh_server.get_mut(node_entry).unwrap();
+                                node.mesh.apply_model(
+                                    &state.queue,
+                                    glam::Mat4::from_scale(glam::Vec3::ONE * 0.4)
+                                        * glam::Mat4::from_translation(glam::vec3(0.0, -1.3, 0.0)),
+                                );
+                            }
                             state.render(&mesh_server, &light_server, &view_bind_group);
                         }
                     }
@@ -117,4 +133,9 @@ fn main() -> anyhow::Result<()> {
         _ => (),
     })?;
     Ok(())
+}
+
+#[test]
+fn t() {
+    dbg!(std::mem::size_of::<i32>());
 }

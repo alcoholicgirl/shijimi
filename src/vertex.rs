@@ -1,5 +1,3 @@
-use crate::bytecast;
-
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 pub struct Vertex {

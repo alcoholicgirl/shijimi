@@ -36,7 +36,7 @@ impl Material {
             self.roughness = Some(Texture::from_rgba8_bytes([0x00u8; 4].as_slice(), 1, 1));
         }
         if self.ao.is_none() {
-            self.ao = Some(Texture::from_rgba8_bytes([0x00u8; 4].as_slice(), 1, 1));
+            self.ao = Some(Texture::from_rgba8_bytes([0xFFu8; 4].as_slice(), 1, 1));
         }
         if self.emission.is_none() {
             self.emission = Some(Texture::from_rgba8_bytes([0x00u8; 4].as_slice(), 1, 1));
