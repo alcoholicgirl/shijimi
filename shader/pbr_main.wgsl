@@ -87,7 +87,8 @@ struct VertexInput {
     @location(0) position: vec3f,
     @location(1) texcoord: vec2f,
     @location(2) normal: vec3f,
-    @location(3) tangent: vec4f, 
+    @location(3) tangent: vec3f, 
+    @location(4) bitangent: vec3f,
 };
 
 struct VertexOutput {
@@ -95,7 +96,8 @@ struct VertexOutput {
     @location(0) worldpos: vec3f,
     @location(1) texcoord: vec2f,
     @location(2) normal: vec3f,
-    @location(3) tangent: vec4f,
+    @location(3) tangent: vec3f,
+    @location(4) bitangent: vec3f,
 };
 
 @vertex
@@ -109,6 +111,7 @@ fn vs_main(
     out.worldpos = worldpos.xyz;
     out.normal = in.normal;
     out.tangent = in.tangent;
+    out.bitangent = in.bitangent;
     return out;
 }
 
@@ -116,8 +119,8 @@ fn vs_main(
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // Normal Mapping
     let normal = normalize(in.normal);
-    let tangent = normalize(in.tangent.xyz);
-    let bitangent = normalize(cross(normal, tangent)) * in.tangent.w;
+    let tangent = normalize(in.tangent);
+    let bitangent = normalize(in.bitangent);
     let pbr_normal = textureSample(t_normal, s_normal, in.texcoord).xyz * 2.0 - vec3(1.0);
     let tbn = mat3x3(tangent, bitangent, normal);
 

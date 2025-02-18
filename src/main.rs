@@ -45,7 +45,7 @@ fn main() -> anyhow::Result<()> {
         ortho_window: (10.0, 10.0),
         depth: 10.0f32,
     });
-    let mut node = mesh::MeshNode::load_from_path("assets/model/mushroom/scene.gltf")?;
+    let mut node = mesh::MeshNode::load_from_path("assets/model/hiroi/scene.gltf")?;
     let mut camera = camera::Camera::default();
     let aspect_ratio = state.size.width as f32 / state.size.height as f32;
     let camera_buffer = state

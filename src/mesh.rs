@@ -278,9 +278,17 @@ fn build(
                 normals
             };
 
-            // Tangents
-            let tangents = if let Some(iter) = reader.read_tangents() {
-                iter.collect::<Vec<_>>()
+            // Tangents & Bitangents
+            let (tangents, bitangents) = if let Some(iter) = reader.read_tangents() {
+                let tangents = iter.clone().map(|x| [x[0], x[1], x[2]]).collect::<Vec<_>>();
+                let bitangents = iter.enumerate().map(|(id, x)| {
+                    let w = x[3];
+                    let t = glam::vec3(x[0], x[1], x[2]);
+                    let n = glam::Vec3::from(normals[id]);
+                    let b = n.cross(t).normalize() * w;
+                    b.to_array()
+                }).collect::<Vec<_>>();
+                (tangents, bitangents)
             } else {
                 // Construct tangents from normals and UVs
                 if indices.len() % 3 != 0 {
@@ -299,72 +307,84 @@ fn build(
                     .iter()
                     .map(|x| normals[*x as usize])
                     .collect::<Vec<_>>();
-                let pos_uv_normal = izip!(
+                let pos_uv = izip!(
                     positions_flattened.chunks_exact(3),
                     texcoords_flattened.chunks_exact(3),
-                    normals_flattened.chunks_exact(3)
                 );
-                let tangents = pos_uv_normal
-                    .map(|(position, texcoord, normal)| {
-                        let (p1, p2, p3) = (
-                            glam::Vec3::from(position[0]),
-                            glam::Vec3::from(position[1]),
-                            glam::Vec3::from(position[2]),
-                        );
-                        let (t1, t2, t3) = (
-                            glam::Vec2::from(texcoord[0]),
-                            glam::Vec2::from(texcoord[1]),
-                            glam::Vec2::from(texcoord[2]),
-                        );
-                        let e1 = p1 - p2;
-                        let e2 = p3 - p2;
-                        let duv1 = t1 - t2;
-                        let duv2 = t3 - t2;
-                        let f = 1.0f32 / (duv1.x * duv2.y - duv2.x * duv1.y);
-                        let tangent = f * glam::vec3(
-                            duv2.y * e1.x - duv1.y * e2.x,
-                            duv2.y * e1.y - duv1.y * e2.y,
-                            duv2.y * e1.z - duv1.y * e2.z,
-                        )
-                        .normalize();
-                        let bitangent = f * glam::vec3(
-                            -duv2.x * e1.x + duv1.x * e2.x,
-                            -duv2.x * e1.y + duv1.x * e2.y,
-                            -duv2.x * e1.z + duv1.x * e2.z,
-                        )
-                        .normalize();
-                        let normal = glam::Vec3::from(normal[1]);
-                        let w = if tangent.cross(normal).dot(bitangent) > 0.0 {
-                            -1.0
-                        } else {
-                            1.0
-                        };
-                        let tangent = glam::Vec4::from((tangent, w));
-                        [tangent, tangent, tangent].into_iter()
-                    })
-                    .flatten()
-                    .collect::<Vec<_>>();
-                let mut tangents_processed: Vec<glam::Vec4> =
+                let mut tangents = vec![];
+                let mut bitangents = vec![];
+                for (position, texcoord) in pos_uv {
+                    let (p1, p2, p3) = (
+                        glam::Vec3::from(position[0]),
+                        glam::Vec3::from(position[1]),
+                        glam::Vec3::from(position[2]),
+                    );
+                    let (t1, t2, t3) = (
+                        glam::Vec2::from(texcoord[0]),
+                        glam::Vec2::from(texcoord[1]),
+                        glam::Vec2::from(texcoord[2]),
+                    );
+                    let e1 = p1 - p2;
+                    let e2 = p3 - p2;
+                    let duv1 = t1 - t2;
+                    let duv2 = t3 - t2;
+                    let f = 1.0f32 / (duv1.x * duv2.y - duv2.x * duv1.y);
+                    let tangent = f * glam::vec3(
+                        duv2.y * e1.x - duv1.y * e2.x,
+                        duv2.y * e1.y - duv1.y * e2.y,
+                        duv2.y * e1.z - duv1.y * e2.z,
+                    )
+                    .normalize();
+                    let bitangent = f * glam::vec3(
+                        -duv2.x * e1.x + duv1.x * e2.x,
+                        -duv2.x * e1.y + duv1.x * e2.y,
+                        -duv2.x * e1.z + duv1.x * e2.z,
+                    )
+                    .normalize();
+
+                    // Applying the same tangent and bitangent for three vertices of a triangle
+                    tangents.push(tangent);
+                    tangents.push(tangent);
+                    tangents.push(tangent);
+                    bitangents.push(bitangent);
+                    bitangents.push(bitangent);
+                    bitangents.push(bitangent);
+                }
+
+                let mut tangent_unique: Vec<glam::Vec3> =
+                    (0..positions.len()).map(|_| Default::default()).collect();
+                let mut bitangent_unique: Vec<glam::Vec3> =
                     (0..positions.len()).map(|_| Default::default()).collect();
 
                 for (index, tangent) in indices.iter().zip(tangents) {
-                    tangents_processed[*index as usize] = tangent;
+                    tangent_unique[*index as usize] = tangent;
                 }
-                let tangents = tangents_processed.iter().map(|t| t.to_array()).collect();
-                tangents
+                for (index, bitangent) in indices.iter().zip(bitangents) {
+                    bitangent_unique[*index as usize] = bitangent;
+                }
+                let tangents = tangent_unique
+                    .iter()
+                    .map(|t| t.to_array())
+                    .collect::<Vec<_>>();
+                let bitangents = bitangent_unique
+                    .iter()
+                    .map(|t| t.to_array())
+                    .collect::<Vec<_>>();
+                (tangents, bitangents)
             };
 
             assert_eq!(positions.len(), texcoords.len());
             assert_eq!(positions.len(), normals.len());
             assert_eq!(positions.len(), tangents.len());
 
-            let vertex_iter = izip!(positions, texcoords, normals, tangents);
+            let vertex_iter = izip!(positions, texcoords, normals, tangents, bitangents);
             let vertices = vertex_iter
-                .map(|(position, texcoord, normal, tangent)| Vertex {
+                .map(|(position, texcoord, normal, tangent, bitangent)| Vertex {
                     position,
                     texcoord,
                     normal,
                     tangent,
+                    bitangent,
                 })
                 .collect::<Vec<_>>();
             let mesh = Mesh {
@@ -498,8 +518,9 @@ impl MeshNode {
         let uniform_data = t_model.to_cols_array_2d();
         let uniform = bytecast::cast_bytes(&uniform_data);
         if let Some(buffer) = &self.uniform_buffer {
-            let mut buffer_view =
-                queue.write_buffer_with(buffer, 0, std::num::NonZero::new(64).unwrap()).unwrap();
+            let mut buffer_view = queue
+                .write_buffer_with(buffer, 0, std::num::NonZero::new(64).unwrap())
+                .unwrap();
             buffer_view.copy_from_slice(uniform);
         }
 
