@@ -60,7 +60,8 @@ var<uniform> view: ViewUniform;
 
 // Model
 struct ModelUniform {
-    @location(0) model: mat4x4<f32>
+    @location(0) model: mat4x4<f32>,
+    @location(1) normal_matrix: mat4x4<f32>,
 }
 @group(2) @binding(0)
 var<uniform> model: ModelUniform;
@@ -109,9 +110,10 @@ fn vs_main(
     out.clip_position = view.projection * worldpos;
     out.texcoord = in.texcoord;
     out.worldpos = worldpos.xyz;
-    out.normal = in.normal;
-    out.tangent = in.tangent;
-    out.bitangent = in.bitangent;
+    let normal_matrix = model.normal_matrix;
+    out.normal = normalize((normal_matrix * vec4f(in.normal, 0.0)).xyz);
+    out.tangent = normalize((normal_matrix * vec4f(in.tangent, 0.0)).xyz);
+    out.bitangent = normalize((normal_matrix * vec4f(in.bitangent, 0.0)).xyz);
     return out;
 }
 
@@ -124,20 +126,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let pbr_normal = textureSample(t_normal, s_normal, in.texcoord).xyz * 2.0 - vec3(1.0);
     let tbn = mat3x3(tangent, bitangent, normal);
 
-    let N = normalize(tbn * normal);
+    let N = normalize(tbn * pbr_normal);
     let V = normalize(view.position.xyz - in.worldpos);
     let albedo = pow(textureSample(t_albedo, s_albedo, in.texcoord).rgb, vec3f(2.2));
     let metallic = textureSample(t_metallic, s_metallic, in.texcoord).r;
     let roughness = textureSample(t_roughness, s_roughness, in.texcoord).r;
     let ao = textureSample(t_ao, s_ao, in.texcoord).r;
-    let F0 = mix(vec3f(0.5), albedo, metallic);
+    let F0 = mix(vec3f(0.005), albedo, metallic);
 
     var l_out = vec3f(0.0);
     // Directional Light
     for (var it = 0u; it < dir_lights.num; it++) {
         // Cook-Torrance specular BRDF
         let light = dir_lights.lights[it];
-        let L = normalize(- light.direction);
+        let L = normalize(-light.direction);
         let H = normalize(V + L);
 
         let D = normal_distribution(N, H, roughness);
@@ -149,11 +151,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 
         let radiance = light.intensity * light.color.rgb * light.color.a;
         l_out += (Kd * albedo / PI + specular) * radiance * max(dot(N, L), 0.0);
-        // return vec4f(light.color.rgb, 1.0);
     }
-    let ambient = vec3f(0.02) * albedo.rgb * ao;
+    let ambient = vec3f(0.12, 0.12, 0.2) * albedo.rgb * ao;
     let color = ambient + l_out;
-    // return vec4f( - normal + in.normal, 1.0);
     return vec4f(reinhard_tonemapping(color), 1.0);
 }   
 
@@ -167,18 +167,16 @@ fn normal_distribution(n: vec3f, h: vec3f, roughness: f32) -> f32 {
     return r2 / (PI * dm * dm);
 }
 
-fn geometry_schlick_ggx(a: f32, roughness: f32) -> f32 {
+fn geometry_schlick_ggx(dot_nv: f32, roughness: f32) -> f32 {
     let r = roughness + 1.0;
     let k = r * r * 0.125;
-    let n = a;
-    let d = a * (1.0 - k) + k;
+    let n = dot_nv;
+    let d = dot_nv * (1.0 - k) + k;
     return n / d;
 }
 
 // Smith's Schlick-GGX
 fn geometry_smith(n: vec3f, v: vec3f, l: vec3f, roughness: f32) -> f32 {
-    let r = roughness + 1.0;
-    let k = r * r / 8.0;
     let n_v = max(dot(n, v), 0.0);
     let n_l = max(dot(n, l), 0.0);
 

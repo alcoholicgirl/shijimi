@@ -2,6 +2,8 @@
 var t_screen: texture_2d<f32>;
 @group(0) @binding(1)
 var s_screen: sampler;
+@group(1) @binding(0)
+var<uniform> screen_size: vec2<i32>;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4f,
@@ -24,5 +26,7 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // Reinhard Tonemapping
     var color = textureSample(t_screen, s_screen, in.texcoord).xyz;
+
     return vec4f(color, 1.0);
 }
+

@@ -13,3 +13,17 @@ pub trait Spatial {
         glam::Vec3::ONE
     }
 }
+
+pub trait SpatialExt: Spatial {
+    fn translate(&mut self, translation: glam::Vec3) {
+        self.set_position(self.get_position() + translation);
+    }
+    fn rotate(&mut self, rotation: glam::Quat) {
+        self.set_rotation(rotation * self.get_rotation());
+    }
+    fn get_model_matrix(&self) -> glam::Mat4 {
+        glam::Mat4::from_translation(self.get_position())
+        * glam::Mat4::from_quat(self.get_rotation())
+        * glam::Mat4::from_scale(self.get_scale())
+    }
+}

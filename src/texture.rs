@@ -91,7 +91,12 @@ impl Texture {
         }
     }
 
-    pub fn create_render_attachment(device: &wgpu::Device, width: u32, height: u32) -> Self {
+    pub fn create_render_attachment(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Self {
         let size = wgpu::Extent3d {
             width,
             height,
@@ -103,7 +108,7 @@ impl Texture {
             dimension: wgpu::TextureDimension::D2,
             sample_count: 1,
             mip_level_count: 1,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -156,7 +161,11 @@ impl Texture {
         }
     }
 
-    pub fn create_shadow_maps_2d_array(device: &wgpu::Device, size: u32, num_shadow_maps: u32) -> Self {
+    pub fn create_shadow_maps_2d_array(
+        device: &wgpu::Device,
+        size: u32,
+        num_shadow_maps: u32,
+    ) -> Self {
         let size = wgpu::Extent3d {
             width: size,
             height: size * num_shadow_maps,

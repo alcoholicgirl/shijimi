@@ -1,4 +1,7 @@
-use crate::{bytecast, material::Material, spatial::Spatial, texture::Texture, vertex::Vertex};
+use crate::{
+    bytecast, material::Material, spatial::Spatial, texture::Texture,
+    vertex::Vertex,
+};
 use gltf::mesh::util::*;
 use iter_tools::dependency::itertools::izip;
 use wgpu::util::DeviceExt;
@@ -65,7 +68,6 @@ fn build(
         gltfnode.name = Some(name.to_string());
     }
     gltfnode.id = node.index();
-
     if let Some(mesh) = node.mesh() {
         print!("(contains mesh)");
         for primitive in mesh.primitives() {
@@ -88,7 +90,7 @@ fn build(
                     .pixels
                     .clone()
                     .into_iter()
-                    .map(|r| [r, r, r, 0xff].into_iter())
+                    .map(|r| [r, 0, 0, 0xff].into_iter())
                     .flatten()
                     .collect::<Vec<_>>(),
                 _ => panic!("Unsupported format: {:?}", image.format),
@@ -281,13 +283,16 @@ fn build(
             // Tangents & Bitangents
             let (tangents, bitangents) = if let Some(iter) = reader.read_tangents() {
                 let tangents = iter.clone().map(|x| [x[0], x[1], x[2]]).collect::<Vec<_>>();
-                let bitangents = iter.enumerate().map(|(id, x)| {
-                    let w = x[3];
-                    let t = glam::vec3(x[0], x[1], x[2]);
-                    let n = glam::Vec3::from(normals[id]);
-                    let b = n.cross(t).normalize() * w;
-                    b.to_array()
-                }).collect::<Vec<_>>();
+                let bitangents = iter
+                    .enumerate()
+                    .map(|(id, x)| {
+                        let w = x[3];
+                        let t = glam::vec3(x[0], x[1], x[2]);
+                        let n = glam::Vec3::from(normals[id]);
+                        let b = n.cross(t).normalize() * w;
+                        b.to_array()
+                    })
+                    .collect::<Vec<_>>();
                 (tangents, bitangents)
             } else {
                 // Construct tangents from normals and UVs
@@ -303,10 +308,7 @@ fn build(
                     .iter()
                     .map(|x| texcoords[*x as usize])
                     .collect::<Vec<_>>();
-                let normals_flattened = indices
-                    .iter()
-                    .map(|x| normals[*x as usize])
-                    .collect::<Vec<_>>();
+
                 let pos_uv = izip!(
                     positions_flattened.chunks_exact(3),
                     texcoords_flattened.chunks_exact(3),
@@ -452,11 +454,15 @@ impl MeshNode {
             "Node #{}: requesting uniform buffer and uniform bind group",
             self.id
         );
-        let model = self.model_matrix().to_cols_array_2d();
+        let model = self.model_matrix();
+        let buffer = [
+            model.to_cols_array_2d(),
+            model.transpose().inverse().to_cols_array_2d(),
+        ];
         self.uniform_buffer = Some(
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("mesh.model_uniform_buffer"),
-                contents: bytecast::cast_bytes(&model),
+                contents: bytecast::cast_bytes(&buffer),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }),
         );
@@ -512,20 +518,22 @@ impl MeshNode {
             * glam::Mat4::from_scale(self.scale)
     }
 
-    pub fn apply_model(&self, queue: &wgpu::Queue, model: glam::Mat4) {
+    pub fn update_uniform(&self, queue: &wgpu::Queue, model: glam::Mat4, view: glam::Mat4) {
         // Update model matrix uniform
         let t_model = model * self.model_matrix();
-        let uniform_data = t_model.to_cols_array_2d();
+        let normal_matrix = t_model.transpose().inverse();
+        let uniform_data = [t_model.to_cols_array(), normal_matrix.to_cols_array()];
+
         let uniform = bytecast::cast_bytes(&uniform_data);
         if let Some(buffer) = &self.uniform_buffer {
             let mut buffer_view = queue
-                .write_buffer_with(buffer, 0, std::num::NonZero::new(64).unwrap())
+                .write_buffer_with(buffer, 0, std::num::NonZero::new(128).unwrap())
                 .unwrap();
             buffer_view.copy_from_slice(uniform);
         }
 
         for child in &self.children {
-            child.apply_model(queue, t_model);
+            child.update_uniform(queue, t_model, view);
         }
     }
 

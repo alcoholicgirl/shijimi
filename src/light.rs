@@ -114,7 +114,7 @@ impl LightServer {
 
     /// Try to spawn a light from given light source
     /// Returns the entry of the spawned if possible
-    pub fn request_light(&mut self, source: LightSource) -> Option<usize> {
+    pub fn request_light(&mut self, source: LightSource) -> anyhow::Result<usize> {
         let used_entries = self
             .lights
             .iter()
@@ -125,10 +125,10 @@ impl LightServer {
             if !used_entries.contains(&entry) {
                 let client = LightClient { source, entry };
                 self.lights.push(client);
-                return Some(entry);
+                return Ok(entry);
             }
         }
-        None
+        Err(anyhow::anyhow!("array size limitation reached: {}", LightServer::ARRAY_SIZE))
     }
 
     // Bind group layout in the main shader
@@ -176,10 +176,10 @@ impl LightSource {
                 let direction = <glam::Vec4 as glam::Vec4Swizzles>::xyz(
                     glam::Mat4::from_quat(*rotation) * glam::Vec4::Z,
                 );
-                let look_at = glam::Mat4::look_to_lh(*position, direction, glam::Vec3::Y);
+                let look_at = glam::Mat4::look_to_rh(*position, direction, glam::Vec3::Y);
                 let (x, y) = *ortho_window;
                 let z = *depth;
-                let ortho = glam::Mat4::orthographic_lh(-x, x, -y, y, 0.0, z);
+                let ortho = glam::Mat4::orthographic_rh(-x, x, -y, y, 0.0, z);
                 ortho * look_at
             }
         }
