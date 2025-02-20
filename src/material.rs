@@ -9,6 +9,7 @@ pub struct Material {
     pub roughness: Option<Texture>,
     pub ao: Option<Texture>,
     pub emission: Option<Texture>,
+    pub transmission: Option<Texture>,
     pub bind_group: Option<wgpu::BindGroup>,
 }
 
@@ -41,6 +42,9 @@ impl Material {
         if self.emission.is_none() {
             self.emission = Some(Texture::from_rgba8_bytes([0x00u8; 4].as_slice(), 1, 1));
         }
+        if self.transmission.is_none() {
+            self.transmission = Some(Texture::from_rgba8_bytes([0x00u8; 4].as_slice(), 1, 1));
+        }
 
         self.albedo.as_mut().unwrap().submit(device, queue);
         self.normal.as_mut().unwrap().submit(device, queue);
@@ -48,183 +52,58 @@ impl Material {
         self.roughness.as_mut().unwrap().submit(device, queue);
         self.ao.as_mut().unwrap().submit(device, queue);
         self.emission.as_mut().unwrap().submit(device, queue);
+        self.transmission.as_mut().unwrap().submit(device, queue);
 
+        let mut iota = 0;
+        let mut iota = move || {
+            iota += 1;
+            iota - 1
+        };
+        let entries = [
+            &self.albedo,
+            &self.normal,
+            &self.metallic,
+            &self.roughness,
+            &self.ao,
+            &self.emission,
+            &self.transmission,
+        ]
+        .iter()
+        .map(|texture| {
+            [wgpu::BindGroupEntry {
+                    binding: iota(),
+                    resource: wgpu::BindingResource::TextureView(
+                        match texture.as_ref().unwrap() {
+                            Texture::Online { view, .. } => view,
+                            Texture::Offline { .. } => unreachable!(),
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: iota(),
+                    resource: wgpu::BindingResource::Sampler(
+                        match texture.as_ref().unwrap() {
+                            Texture::Online { sampler, .. } => sampler,
+                            Texture::Offline { .. } => unreachable!(),
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: iota(),
+                    resource: match texture.as_ref().unwrap() {
+                        Texture::Online {
+                            modulation: Some((buffer, _)),
+                            ..
+                        } => buffer.as_entire_binding(),
+                        _ => unreachable!(),
+                    },
+                },
+            ]
+        }).flatten().collect::<Vec<_>>();
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material.bind_group"),
             layout: &texture_bind_group_layout,
-            entries: &[
-                // Albedo
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        match &self.albedo.as_ref().unwrap() {
-                            Texture::Online { view, .. } => view,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(
-                        match &self.albedo.as_ref().unwrap() {
-                            Texture::Online { sampler, .. } => sampler,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: match &self.albedo.as_ref().unwrap() {
-                        Texture::Online {
-                            modulation: Some((buffer, _)),
-                            ..
-                        } => buffer.as_entire_binding(),
-                        _ => unreachable!(),
-                    },
-                },
-                // Normal
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(
-                        match &self.normal.as_ref().unwrap() {
-                            Texture::Online { view, .. } => view,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(
-                        match &self.normal.as_ref().unwrap() {
-                            Texture::Online { sampler, .. } => sampler,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: match &self.normal.as_ref().unwrap() {
-                        Texture::Online {
-                            modulation: Some((buffer, _)),
-                            ..
-                        } => buffer.as_entire_binding(),
-                        _ => unreachable!(),
-                    },
-                },
-                // Metallic
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::TextureView(
-                        match &self.metallic.as_ref().unwrap() {
-                            Texture::Online { view, .. } => view,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::Sampler(
-                        match &self.metallic.as_ref().unwrap() {
-                            Texture::Online { sampler, .. } => sampler,
-                            _ => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: match &self.metallic.as_ref().unwrap() {
-                        Texture::Online {
-                            modulation: Some((buffer, _)),
-                            ..
-                        } => buffer.as_entire_binding(),
-                        _ => unreachable!(),
-                    },
-                },
-                // Roughness
-                wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: wgpu::BindingResource::TextureView(
-                        match &self.roughness.as_ref().unwrap() {
-                            Texture::Online { view, .. } => view,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 10,
-                    resource: wgpu::BindingResource::Sampler(
-                        match &self.roughness.as_ref().unwrap() {
-                            Texture::Online { sampler, .. } => sampler,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 11,
-                    resource: match &self.roughness.as_ref().unwrap() {
-                        Texture::Online {
-                            modulation: Some((buffer, _)),
-                            ..
-                        } => buffer.as_entire_binding(),
-                        _ => unreachable!(),
-                    },
-                },
-                // AO
-                wgpu::BindGroupEntry {
-                    binding: 12,
-                    resource: wgpu::BindingResource::TextureView(
-                        match &self.ao.as_ref().unwrap() {
-                            Texture::Online { view, .. } => view,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 13,
-                    resource: wgpu::BindingResource::Sampler(match &self.ao.as_ref().unwrap() {
-                        Texture::Online { sampler, .. } => sampler,
-                        Texture::Offline { .. } => unreachable!(),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 14,
-                    resource: match self.ao.as_ref().unwrap() {
-                        Texture::Online {
-                            modulation: Some((buffer, _)),
-                            ..
-                        } => buffer.as_entire_binding(),
-                        _ => unreachable!(),
-                    },
-                },
-
-                // Emissive
-                wgpu::BindGroupEntry {
-                    binding: 15,
-                    resource: wgpu::BindingResource::TextureView(
-                        match &self.emission.as_ref().unwrap() {
-                            Texture::Online { view, .. } => view,
-                            Texture::Offline { .. } => unreachable!(),
-                        },
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 16,
-                    resource: wgpu::BindingResource::Sampler(match &self.ao.as_ref().unwrap() {
-                        Texture::Online { sampler, .. } => sampler,
-                        Texture::Offline { .. } => unreachable!(),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 17,
-                    resource: match self.emission.as_ref().unwrap() {
-                        Texture::Online {
-                            modulation: Some((buffer, _)),
-                            ..
-                        } => buffer.as_entire_binding(),
-                        _ => unreachable!(),
-                    },
-                },
-            ],
+            entries: entries.as_slice()
         });
         self.bind_group = Some(bind_group);
     }

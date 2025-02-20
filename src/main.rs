@@ -33,7 +33,7 @@ fn main() -> anyhow::Result<()> {
         position: glam::vec3(0.0, 4.0, 0.0),
         rotation: glam::Quat::from_rotation_y(15f32)
             * glam::Quat::from_rotation_x(-45f32.to_radians()),
-        intensity: 40.0f32,
+        intensity: 140.0f32,
         cast_shadow: true,
         color: [0.9, 0.7, 0.5, 1.0],
         ortho_window: (10.0, 10.0),
@@ -44,7 +44,7 @@ fn main() -> anyhow::Result<()> {
         position: glam::vec3(0.0, 4.0, 0.0),
         rotation: glam::Quat::from_rotation_y(-15f32)
             * glam::Quat::from_rotation_x(-45f32.to_radians()),
-        intensity: 80.0f32,
+        intensity: 180.0f32,
         cast_shadow: true,
         color: [0.4, 0.9, 0.6, 1.0],
         ortho_window: (10.0, 10.0),
@@ -54,14 +54,14 @@ fn main() -> anyhow::Result<()> {
         position: glam::vec3(0.0, 4.0, 0.0),
         rotation: glam::Quat::from_rotation_y(-45f32)
             * glam::Quat::from_rotation_x(75f32.to_radians()),
-        intensity: 50.0f32,
+        intensity: 150.0f32,
         cast_shadow: true,
         color: [0.5, 0.5, 0.8, 1.0],
         ortho_window: (10.0, 10.0),
         depth: 10.0f32,
     })?;
 
-    let mut node = mesh::MeshNode::load_from_path("assets/model/lasergun/scene.gltf")?;
+    let mut node = mesh::MeshNode::load_from_path("assets/model/hiroi/scene.gltf")?;
     server.submit_mesh_node(&mut node);
     let node_entry = mesh_server.add_node(node);
     let mut frame = 0;
@@ -144,7 +144,7 @@ fn main() -> anyhow::Result<()> {
                                 let node = mesh_server.get_mut(node_entry).unwrap();
                                 node.mesh.update_uniform(
                                     &server.queue,
-                                    glam::Mat4::from_scale(glam::Vec3::ONE * 20f32)
+                                    glam::Mat4::from_scale(glam::Vec3::ONE * 0.4f32)
                                         * glam::Mat4::from_translation(glam::vec3(0.0, 0.0, 0.24)),
                                     camera.get_view_matrix(),
                                 );

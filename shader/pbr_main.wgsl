@@ -50,6 +50,14 @@ var s_emissive: sampler;
 @group(0) @binding(17)
 var<uniform> m_emissive: vec4f;
 
+// Transmission
+@group(0) @binding(18)
+var t_transmission: texture_2d<f32>;
+@group(0) @binding(19)
+var s_transmittion: sampler;
+@group(0) @binding(20)
+var<uniform> m_transmission: vec4f;
+
 // View
 struct ViewUniform {
     @location(0) projection: mat4x4<f32>,
@@ -67,7 +75,6 @@ struct ModelUniform {
 var<uniform> model: ModelUniform;
 
 // Lights
-
 const ARRAY_SIZE: u32 = 8u;
 struct DirLight {
     @location(0) position: vec3f,
@@ -119,6 +126,10 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+    // Alpha Clipping
+    if textureSample(t_albedo, s_albedo, in.texcoord).a < 0.01 {
+        discard;
+    }
     // Normal Mapping
     let normal = normalize(in.normal);
     let tangent = normalize(in.tangent);
@@ -128,16 +139,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 
     let N = normalize(tbn * pbr_normal);
     let V = normalize(view.position.xyz - in.worldpos);
-    let albedo = pow(textureSample(t_albedo, s_albedo, in.texcoord).rgb, vec3f(2.2));
+    let albedo = pow(textureSample(t_albedo, s_albedo, in.texcoord).rgb, vec3f(2.2)) * m_albedo.rgb;
+    
     let metallic = textureSample(t_metallic, s_metallic, in.texcoord).r;
     let roughness = textureSample(t_roughness, s_roughness, in.texcoord).r;
     let ao = textureSample(t_ao, s_ao, in.texcoord).r;
-    let F0 = mix(vec3f(0.005), albedo, metallic);
+    let emissive = textureSample(t_emissive, s_emissive, in.texcoord);
+    let transmission = textureSample(t_transmission, s_transmittion, in.texcoord);
+    let transmission_factor = m_transmission[0];
+    let IOR = m_transmission[3];
+    let F0 = mix(m_metallic.rgb, albedo, metallic);
 
+    // Cook-Torrance specular BRDF
     var l_out = vec3f(0.0);
     // Directional Light
     for (var it = 0u; it < dir_lights.num; it++) {
-        // Cook-Torrance specular BRDF
         let light = dir_lights.lights[it];
         let L = normalize(-light.direction);
         let H = normalize(V + L);
@@ -152,8 +168,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         let radiance = light.intensity * light.color.rgb * light.color.a;
         l_out += (Kd * albedo / PI + specular) * radiance * max(dot(N, L), 0.0);
     }
+    
     let ambient = vec3f(0.12, 0.12, 0.2) * albedo.rgb * ao;
-    let color = ambient + l_out;
+    let color = ambient + (emissive * m_emissive).rgb + l_out;
     return vec4f(reinhard_tonemapping(color), 1.0);
 }   
 
@@ -191,6 +208,11 @@ fn fresnel_schlick(h: vec3f, v: vec3f, f: vec3f) -> vec3f {
     return f + (vec3f(1.0) - f) * pow(clamp(1.0 - dot(h, v), 0.0, 1.0), 5.0);
 }
 
+fn hash(uv: vec2f) -> f32 {
+    return fract(sin(7.289 * uv.x + 11.23 * uv.y) * 23758.5453);
+}
+
+// Tone Mapping
 fn reinhard_tonemapping(color: vec3f) -> vec3f {
     return pow(color / vec3(color + vec3f(1.0)), vec3(1.0 / 2.2));
 }

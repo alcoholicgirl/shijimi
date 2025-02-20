@@ -1,6 +1,14 @@
 use crate::bytecast;
 use wgpu::util::DeviceExt;
 
+/// A texture for general purposes.  
+/// An `offline` texture represents the raw data of an image.  
+/// An `online` texture represents a GPU texture handle.  
+/// For an online texture, `modulation` is a reserved uniform, and its functionality can vary depending on the context.
+/// For example, `modulation` can be applied to:  
+/// - `albedo`, as a multiplier.
+/// - `metallic`, as the Fresnel constant.
+/// - `transmission`, as the index of refraction (IOR).
 #[allow(unused)]
 pub enum Texture {
     Offline {

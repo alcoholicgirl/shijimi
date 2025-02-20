@@ -1,7 +1,6 @@
-use crate::{
-    bytecast, material::Material, spatial::Spatial, texture::Texture,
-    vertex::Vertex,
-};
+use std::thread;
+
+use crate::{bytecast, material::Material, spatial::Spatial, texture::Texture, vertex::Vertex};
 use gltf::mesh::util::*;
 use iter_tools::dependency::itertools::izip;
 use wgpu::util::DeviceExt;
@@ -130,7 +129,7 @@ fn build(
                 }
             }
 
-            // Metallic
+            // Metallic & Roughness
             if let Some(tex) = primitive
                 .material()
                 .pbr_metallic_roughness()
@@ -157,15 +156,11 @@ fn build(
                         })
                         .flatten()
                         .collect();
-
                     material.metallic = Some(Texture::Offline {
                         width: texture.width,
                         height: texture.height,
                         data: metallic,
-                        modulation: [primitive
-                            .material()
-                            .pbr_metallic_roughness()
-                            .metallic_factor(); 4],
+                        modulation: [0.03, 0.03, 0.03, 0.0],
                     });
 
                     material.roughness = Some(Texture::Offline {
@@ -193,6 +188,7 @@ fn build(
                 }
             }
 
+            // Emmisive
             if let Some(tex) = primitive.material().emissive_texture() {
                 let texture = &images.get(tex.texture().index());
                 let modulation = primitive.material().emissive_factor();
@@ -206,6 +202,23 @@ fn build(
                 }
             }
 
+            // Transmission & IOR
+            if let Some(tex) = primitive.material().transmission() {
+                if let Some(transmission_tex) = tex.transmission_texture() {
+                    let texture = &images.get(transmission_tex.texture().index());
+                    let ior = primitive.material().ior().unwrap_or(1.0);
+                    let modulation = [tex.transmission_factor(), 0.0, 0.0, ior];
+
+                    if let Some(texture) = texture {
+                        material.transmission = Some(Texture::Offline {
+                            width: texture.width,
+                            height: texture.height,
+                            data: rgba8_loader(texture),
+                            modulation,
+                        })
+                    }
+                }
+            }
             gltfnode.material = material;
 
             // Geometry
@@ -344,7 +357,7 @@ fn build(
                     )
                     .normalize();
 
-                    // Applying the same tangent and bitangent for three vertices of a triangle
+                    // Applying the same tangent and bitangent for all three vertices of a triangle
                     tangents.push(tangent);
                     tangents.push(tangent);
                     tangents.push(tangent);
@@ -374,11 +387,9 @@ fn build(
                     .collect::<Vec<_>>();
                 (tangents, bitangents)
             };
-
             assert_eq!(positions.len(), texcoords.len());
             assert_eq!(positions.len(), normals.len());
             assert_eq!(positions.len(), tangents.len());
-
             let vertex_iter = izip!(positions, texcoords, normals, tangents, bitangents);
             let vertices = vertex_iter
                 .map(|(position, texcoord, normal, tangent, bitangent)| Vertex {
@@ -437,23 +448,17 @@ impl MeshNode {
         texture_bind_group_layout: &wgpu::BindGroupLayout,
         model_bind_group_layout: &wgpu::BindGroupLayout,
     ) {
-        log::info!("Node #{}: requesting texture bind group", self.id);
         if self.material.bind_group.is_none() {
             self.material
                 .submit(device, queue, texture_bind_group_layout);
         }
 
-        log::info!("Node #{}: requesting mesh buffers", self.id);
         if let Some(mesh) = &mut self.mesh {
             if mesh.buffers.is_none() {
                 let _ = mesh.submit(device);
             }
         }
-
-        log::info!(
-            "Node #{}: requesting uniform buffer and uniform bind group",
-            self.id
-        );
+        
         let model = self.model_matrix();
         let buffer = [
             model.to_cols_array_2d(),
@@ -484,17 +489,6 @@ impl MeshNode {
                 model_bind_group_layout,
             );
         }
-    }
-
-    pub fn load_from_slice(data: &[u8]) -> anyhow::Result<Self> {
-        let (gltf, buffers, images) = gltf::import_slice(data)?;
-        let mut root_node = MeshNode::default();
-        for scene in gltf.scenes() {
-            for node in scene.nodes() {
-                root_node.push(build(&node, &buffers, &images, 0));
-            }
-        }
-        Ok(root_node)
     }
 
     pub fn load_from_path(path: &'static str) -> anyhow::Result<Self> {
