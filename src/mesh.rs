@@ -1,4 +1,4 @@
-use std::thread;
+use std::{sync::Arc, thread};
 
 use crate::{bytecast, material::Material, spatial::Spatial, texture::Texture, vertex::Vertex};
 use gltf::mesh::util::*;
@@ -37,7 +37,7 @@ pub struct MeshServer {
 fn build(
     node: &gltf::Node,
     buffers: &Vec<gltf::buffer::Data>,
-    images: &Vec<gltf::image::Data>,
+    images: &Vec<Arc<gltf::image::Data>>,
     depth: u32,
 ) -> MeshNode {
     let intent = || {
@@ -72,7 +72,7 @@ fn build(
         for primitive in mesh.primitives() {
             // Material
             let mut material = Material::default();
-            let rgba8_loader = |image: &gltf::image::Data| match image.format {
+            let rgba8_loader = |image: Arc<gltf::image::Data>| match image.format {
                 gltf::image::Format::R8G8B8A8 => image.pixels.clone(),
                 gltf::image::Format::R8G8B8 => {
                     let alpha = 0xffu8;
@@ -96,128 +96,176 @@ fn build(
             };
 
             // Albedo
+            let mut albedo_loader = None;
             if let Some(tex) = primitive
                 .material()
                 .pbr_metallic_roughness()
                 .base_color_texture()
             {
-                let albedo = &images.get(tex.texture().index());
-                if let Some(albedo) = albedo {
-                    material.albedo = Some(Texture::Offline {
-                        width: albedo.width,
-                        height: albedo.height,
-                        data: rgba8_loader(albedo),
-                        modulation: primitive
-                            .material()
-                            .pbr_metallic_roughness()
-                            .base_color_factor(),
-                    });
+                let texture = images.get(tex.texture().index());
+                if let Some(texture) = texture {
+                    let p_texture = texture.clone();
+                    let (width, height) = (texture.width, texture.height);
+                    albedo_loader = Some(thread::spawn(move || {
+                        (rgba8_loader(p_texture.clone()), p_texture)
+                    }));
                 }
             }
 
             // Normal
+            let mut normal_loader = None;
             if let Some(normal) = primitive.material().normal_texture() {
                 let id = normal.texture().index();
-                let texture = &images.get(id);
+                let texture = images.get(id);
                 if let Some(texture) = texture {
-                    material.normal = Some(Texture::Offline {
-                        width: texture.width,
-                        height: texture.height,
-                        data: rgba8_loader(texture),
-                        modulation: [1.0; 4],
-                    });
+                    let p_texture = texture.clone();
+                    normal_loader = Some(thread::spawn(move || {
+                        (rgba8_loader(p_texture.clone()), p_texture)
+                    }));
                 }
             }
 
             // Metallic & Roughness
+            let mut metallic_roughness_loader = None;
             if let Some(tex) = primitive
                 .material()
                 .pbr_metallic_roughness()
                 .metallic_roughness_texture()
             {
-                let texture = &images.get(tex.texture().index());
+                let texture = images.get(tex.texture().index());
                 if let Some(texture) = texture {
-                    let data = rgba8_loader(texture);
-                    let metallic = data
-                        .clone()
-                        .chunks_exact(4)
-                        .map(|rgba| {
-                            let f = rgba[2];
-                            [f; 4].into_iter()
-                        })
-                        .flatten()
-                        .collect();
-                    let roughness = data
-                        .clone()
-                        .chunks_exact(4)
-                        .map(|rgba| {
-                            let f = rgba[1];
-                            [f; 4].into_iter()
-                        })
-                        .flatten()
-                        .collect();
-                    material.metallic = Some(Texture::Offline {
-                        width: texture.width,
-                        height: texture.height,
-                        data: metallic,
-                        modulation: [0.03, 0.03, 0.03, 0.0],
-                    });
-
-                    material.roughness = Some(Texture::Offline {
-                        width: texture.width,
-                        height: texture.height,
-                        data: roughness,
-                        modulation: [primitive
-                            .material()
-                            .pbr_metallic_roughness()
-                            .roughness_factor(); 4],
-                    });
+                    let p_texture = texture.clone();
+                    metallic_roughness_loader = Some(thread::spawn(move || {
+                        (rgba8_loader(p_texture.clone()), p_texture)
+                    }));
                 }
             }
 
             // AO
+            let mut ao_loader = None;
             if let Some(tex) = primitive.material().occlusion_texture() {
-                let texture = &images.get(tex.texture().index());
+                let texture = images.get(tex.texture().index());
                 if let Some(texture) = texture {
-                    material.ao = Some(Texture::Offline {
-                        width: texture.width,
-                        height: texture.height,
-                        data: rgba8_loader(texture),
-                        modulation: [1.0; 4],
-                    });
+                    let p_texture = texture.clone();
+                    ao_loader = Some(thread::spawn(move || {
+                        (rgba8_loader(p_texture.clone()), p_texture)
+                    }));
                 }
             }
-
-            // Emmisive
+            // Emissive
+            let mut emissive_loader = None;
             if let Some(tex) = primitive.material().emissive_texture() {
-                let texture = &images.get(tex.texture().index());
-                let modulation = primitive.material().emissive_factor();
+                let texture = images.get(tex.texture().index());
                 if let Some(texture) = texture {
-                    material.emission = Some(Texture::Offline {
-                        width: texture.width,
-                        height: texture.height,
-                        data: rgba8_loader(texture),
-                        modulation: [modulation[0], modulation[1], modulation[2], 1.0],
-                    })
+                    let p_texture = texture.clone();
+                    let modulation = primitive.material().emissive_factor();
+                    emissive_loader = Some(thread::spawn(move || {
+                        (rgba8_loader(p_texture.clone()), p_texture, modulation)
+                    }));
                 }
             }
 
             // Transmission & IOR
+            let mut transmission_loader = None;
             if let Some(tex) = primitive.material().transmission() {
                 if let Some(transmission_tex) = tex.transmission_texture() {
-                    let texture = &images.get(transmission_tex.texture().index());
+                    let texture = images.get(transmission_tex.texture().index());
                     let ior = primitive.material().ior().unwrap_or(1.0);
-                    let modulation = [tex.transmission_factor(), 0.0, 0.0, ior];
-
                     if let Some(texture) = texture {
-                        material.transmission = Some(Texture::Offline {
-                            width: texture.width,
-                            height: texture.height,
-                            data: rgba8_loader(texture),
-                            modulation,
-                        })
+                        let p_texture = texture.clone();
+                        let modulation = [tex.transmission_factor(), 0.0, 0.0, ior];
+                        transmission_loader = Some(thread::spawn(move || {
+                            (rgba8_loader(p_texture.clone()), p_texture, modulation)
+                        }));
                     }
                 }
+            }
+
+            // Join texture loader threads
+            if let Some(handle) = albedo_loader {
+                let (data, p_texture) = handle.join().unwrap();
+                material.albedo = Some(Texture::Offline {
+                    width: p_texture.width,
+                    height: p_texture.height,
+                    data,
+                    modulation: primitive
+                        .material()
+                        .pbr_metallic_roughness()
+                        .base_color_factor(),
+                });
+            }
+            if let Some(handle) = normal_loader {
+                let (data, p_texture) = handle.join().unwrap();
+                material.normal = Some(Texture::Offline {
+                    width: p_texture.width,
+                    height: p_texture.height,
+                    data,
+                    modulation: [1.0; 4],
+                });
+            }
+            if let Some(handle) = metallic_roughness_loader {
+                let (data, p_texture) = handle.join().unwrap();
+                let metallic = data
+                    .clone()
+                    .chunks_exact(4)
+                    .map(|rgba| {
+                        let f = rgba[2];
+                        [f; 4].into_iter()
+                    })
+                    .flatten()
+                    .collect();
+                let roughness = data
+                    .clone()
+                    .chunks_exact(4)
+                    .map(|rgba| {
+                        let f = rgba[1];
+                        [f; 4].into_iter()
+                    })
+                    .flatten()
+                    .collect();
+                material.metallic = Some(Texture::Offline {
+                    width: p_texture.width,
+                    height: p_texture.height,
+                    data: metallic,
+                    modulation: [0.03, 0.03, 0.03, 0.0],
+                });
+
+                material.roughness = Some(Texture::Offline {
+                    width: p_texture.width,
+                    height: p_texture.height,
+                    data: roughness,
+                    modulation: [primitive
+                        .material()
+                        .pbr_metallic_roughness()
+                        .roughness_factor(); 4],
+                });
+            }
+            if let Some(handle) = ao_loader {
+                let (data, p_texture) = handle.join().unwrap();
+                material.ao = Some(Texture::Offline {
+                    width: p_texture.width,
+                    height: p_texture.height,
+                    data,
+                    modulation: [1.0; 4],
+                });
+            }
+            if let Some(handle) = emissive_loader {
+                let (data, p_texture, modulation) = handle.join().unwrap();
+                material.emission = Some(Texture::Offline {
+                    width: p_texture.width,
+                    height: p_texture.height,
+                    data,
+                    modulation: [modulation[0], modulation[1], modulation[2], 1.0],
+                })
+            }
+            if let Some(handle) = transmission_loader {
+                let (data, p_texture, modulation) = handle.join().unwrap();
+                material.transmission = Some(Texture::Offline {
+                    width: p_texture.width,
+                    height: p_texture.height,
+                    data,
+                    modulation,
+                })
             }
             gltfnode.material = material;
 
@@ -458,7 +506,7 @@ impl MeshNode {
                 let _ = mesh.submit(device);
             }
         }
-        
+
         let model = self.model_matrix();
         let buffer = [
             model.to_cols_array_2d(),
@@ -492,7 +540,8 @@ impl MeshNode {
     }
 
     pub fn load_from_path(path: &'static str) -> anyhow::Result<Self> {
-        let (gltf, buffers, images) = gltf::import(path)?;
+        let (gltf, buffers, mut images) = gltf::import(path)?;
+        let images = images.drain(..).map(|x| Arc::new(x)).collect();
         let mut root_node = MeshNode::default();
         for scene in gltf.scenes() {
             for node in scene.nodes() {

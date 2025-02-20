@@ -61,7 +61,7 @@ fn main() -> anyhow::Result<()> {
         depth: 10.0f32,
     })?;
 
-    let mut node = mesh::MeshNode::load_from_path("assets/model/hiroi/scene.gltf")?;
+    let mut node = mesh::MeshNode::load_from_path("assets/model/pistol/scene.gltf")?;
     server.submit_mesh_node(&mut node);
     let node_entry = mesh_server.add_node(node);
     let mut frame = 0;
